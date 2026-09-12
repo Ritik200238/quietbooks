@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Compact compiler output.
+#
+# Not committed: `build/keys` alone is well over a hundred megabytes of proving
+# and verifying keys, and every one of them is reproducible from the contract
+# source with a pinned toolchain. `npm run compact` regenerates the lot.
+contract/build/
+
+# TypeScript output
+dist/
+*.tsbuildinfo
+
+# Local private state stores. These hold the openings that make an invoice
+# provable; they are per-machine and must never be shared or committed.
+*.level
+.private-state/
+quietbooks-*-private-state/
+quietbooks-*-signing-keys/
+
+# Runtime
+logs/
+*.log
+.env
+.env.local
+!.env.example
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

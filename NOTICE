@@ -1,0 +1,118 @@
+QuietBooks
+Copyright 2026 QuietBooks contributors
+
+This product includes software developed for the Midnight Network ecosystem.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at http://www.apache.org/licenses/LICENSE-2.0
+
+
+ECOSYSTEM ATTRIBUTION
+=====================
+
+QuietBooks is built on patterns established by the Midnight Foundation and the
+wider ecosystem. Where a file adapts someone else's work closely, its header
+says so and carries the original licence. This file records the debts that are
+architectural rather than line-by-line.
+
+Every Compact circuit, every witness implementation and every line of the
+application is original to this project. Compact is neither Solidity nor Leo,
+so nothing could be copied even where we wanted to: what was borrowed is
+design, and it is listed here so a reader can go and check the originals.
+
+
+Midnight Foundation (https://github.com/midnightntwrk)
+------------------------------------------------------
+
+  midnightntwrk/example-bboard                          Apache-2.0
+      The project layout (contract / api / cli / ui), the Lace DApp Connector
+      wiring, and the provider assembly in the browser: FetchZkConfigProvider,
+      httpClientProofProvider, indexerPublicDataProvider, and the balanceTx /
+      submitTx adapters. Offered by Midnight as a template, and used as one.
+
+  midnightntwrk/example-zkloan                          Apache-2.0
+      The identity model. Every party key in QuietBooks is a domain-separated
+      hash of a witness-held secret, and `ownPublicKey()` is never used for
+      authorisation. That rule, and the PIN-rotation pattern that lets a party
+      shed a linkable history, are taken from this example.
+
+  midnightntwrk/example-counter                         Apache-2.0
+      The minimal compile target used to verify a toolchain installation.
+
+  midnightntwrk/midnight-local-dev                      Apache-2.0
+      The local network composition in `localnet/standalone.yml`, the image
+      versions that are known to work together, and the wallet sync, funding and
+      DUST-registration sequence reproduced in `e2e/src/wallet.ts`. The genesis
+      seed used by the end-to-end run is documented there.
+
+  midnightntwrk/midnight-docs                           Apache-2.0
+      The compatibility matrix that pins every version this project uses.
+
+
+OpenZeppelin (https://github.com/OpenZeppelin)
+----------------------------------------------
+
+  OpenZeppelin/compact-contracts                        MIT
+      The shielded custody model. `ShieldedTreasury` and
+      `ShieldedTreasuryStateless` document, in their own headers, that a
+      contract holding a shielded coin necessarily publishes its value. That
+      finding shaped QuietBooks' central design decision: the private
+      settlement path does not take custody, and the escrow path does and says
+      so. The `Ownable` witness-derived account identity and the per-module
+      initialisation flag are also modelled on this library.
+
+
+Independent ecosystem projects
+------------------------------
+
+  DpacJones/selkie-usdm-escrow                          MIT
+      Copyright (c) 2026 Dennis Zarelli (Atlantis)
+      The commitment and claim discipline: compute the commitment in-circuit
+      from the witness rather than accepting it as an argument; bind a second
+      authority commitment to the record it authorises; keep a settled map
+      entry as its own nullifier instead of maintaining a separate set; and
+      reject an all-zero secret at the witness boundary, because the hiding
+      property rests entirely on it. Selkie's own header names the gap its
+      design leaves .. a cancel with no deadline .. and QuietBooks closes it.
+
+  robertocarlous/Shadow-Payroll                         Apache-2.0
+      The continuous-integration shape, including pinning the Compact toolchain
+      to an exact version rather than tracking the latest, and the practice of
+      making a deadline testable by allowing the clock to be supplied.
+
+  PhiBao/candor                                         Apache-2.0
+      The epoch-scoped nullifier, where the epoch is read from ledger state so a
+      caller cannot misrepresent which period they are acting in.
+
+  WHXisWH/alpaca-invoice                                MIT
+      The product design for private invoicing: the invoice lifecycle, per-field
+      commitments, and above all the selective-disclosure audit model .. an
+      authorisation naming an auditor, a scope restricted to specific fields,
+      and an expiry, recorded on chain while the data itself travels out of
+      band. QuietBooks' audit envelope is a reimplementation of that idea for
+      Compact. No Leo source was copied; it does not run on Midnight.
+
+  NethermindEth/stellar-private-payments                Apache-2.0
+      The shape of a portable disclosure receipt: context fields bound into the
+      proof by a hash, so that altering any of them invalidates the receipt
+      while leaving the cryptography intact. Read as a design reference only.
+
+  sablier-labs/evm-monorepo                             BUSL-1.1
+      Read, not used. The linear unlock formula in `LockupMath.sol` was studied
+      while designing time-gated release. No code was taken: the licence does
+      not permit it, and the arithmetic is short enough to state independently.
+
+
+TOOLCHAIN
+=========
+
+  Compact language 0.23, toolchain 0.31.1, devtools 0.5.1
+  @midnight-ntwrk/compact-runtime 0.16.0
+  @midnight-ntwrk/midnight-js-* 4.1.1
+  @midnight-ntwrk/dapp-connector-api 4.0.1
+  @midnight-ntwrk/wallet-sdk 1.2.0
+  proof-server 8.1.0, indexer-standalone 4.3.3, midnight-node 1.0.0
+
+  These versions are pinned deliberately and together. `compact update` without
+  an explicit version installs a toolchain whose language version has moved past
+  0.23, and the contract will not compile against it.
