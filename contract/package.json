@@ -1,0 +1,42 @@
+{
+  "name": "@quietbooks/contract",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "QuietBooks Compact contract: private B2B invoicing, settlement and selective audit on Midnight.",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "build",
+    "src"
+  ],
+  "scripts": {
+    "compact": "compact compile src/quietbooks.compact build",
+    "compact:fast": "compact compile --skip-zk src/quietbooks.compact build",
+    "format": "compact format src/quietbooks.compact",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-artifacts.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/compact-runtime": "0.16.0",
+    "@midnight-ntwrk/midnight-js-protocol": "4.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
