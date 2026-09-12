@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# The Compact toolchain is pinned to an exact version on purpose. `compact
+# update` with no argument installs the latest toolchain, whose language version
+# has moved past the 0.23 this contract declares, and the build fails with a
+# message that does not mention versions. Pinning here means CI reproduces what
+# a developer runs locally.
+env:
+  COMPACT_DEVTOOLS_VERSION: '0.5.1'
+  COMPACT_TOOLCHAIN_VERSION: '0.31.1'
+  NODE_VERSION: '22'
+
+jobs:
+  contract:
+    name: Compile the contract and run the test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install the Compact developer tools
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/midnightntwrk/compact/releases/download/compact-v${COMPACT_DEVTOOLS_VERSION}/compact-installer.sh" | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install the pinned Compact compiler
+        run: compact update "$COMPACT_TOOLCHAIN_VERSION"
+
+      - name: Report the toolchain in use
+        run: |
+          compact --version
+          compact compile --version
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Compile the Compact contract
+        # The technical gate for this project: if this step fails, nothing else
+        # is worth running.
+        run: npm run compact
+
+      - name: Confirm proving and verifying keys were produced
+        run: |
+          test -d contract/build/keys
+          count=$(ls contract/build/keys/*.verifier | wc -l)
+          echo "verifier keys: $count"
+          test "$count" -gt 0
+
+      - name: Build the TypeScript packages
+        run: npm run build
+
+      - name: Run the contract test suite
+        run: npm test
+
+      - name: Typecheck every workspace
+        run: npm run typecheck
+
+  frontend:
+    name: Build the web interface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # The interface imports generated contract bindings, so the Compact
+      # compiler is required even for a frontend-only build.
+      - name: Install the Compact developer tools
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/midnightntwrk/compact/releases/download/compact-v${COMPACT_DEVTOOLS_VERSION}/compact-installer.sh" | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install the pinned Compact compiler
+        run: compact update "$COMPACT_TOOLCHAIN_VERSION"
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Compile the Compact contract
+        run: npm run compact
+
+      - name: Build the contract and API packages
+        run: |
+          npm run build --workspace @quietbooks/contract
+          npm run build --workspace @quietbooks/api
+
+      - name: Build the interface
+        run: npm run build --workspace @quietbooks/ui
