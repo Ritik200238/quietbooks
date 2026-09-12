@@ -12,9 +12,17 @@
 # 0.23), and a newer node or indexer is not guaranteed to speak to artifacts
 # built by that compiler.
 
+# Every service restarts on failure. The indexer in particular can lose a race
+# with the node: the node reports healthy as soon as its RPC answers, which is
+# before it has produced block 1, and an indexer that starts in that window dies
+# with "Cannot construct OnlineClientAtBlock: block number 1 not found" and stays
+# dead. Restarting is the documented shape of this stack rather than a patch over
+# a bug; the node is authoritative and the indexer is expected to catch up to it.
+
 services:
   proof-server:
     container_name: 'quietbooks-proof-server'
+    restart: unless-stopped
     image: 'midnightntwrk/proof-server:8.1.0'
     command: ['midnight-proof-server', '-v']
     ports:
@@ -30,6 +38,7 @@ services:
 
   node:
     container_name: 'quietbooks-node'
+    restart: unless-stopped
     image: 'midnightntwrk/midnight-node:1.0.1'
     ports:
       - '0.0.0.0:9944:9944'
@@ -45,6 +54,7 @@ services:
 
   indexer:
     container_name: 'quietbooks-indexer'
+    restart: unless-stopped
     image: 'midnightntwrk/indexer-standalone:4.3.3'
     ports:
       - '0.0.0.0:8088:8088'
