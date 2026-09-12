@@ -1,0 +1,34 @@
+{
+  "name": "quietbooks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Private B2B invoicing, settlement and selective audit on Midnight.",
+  "workspaces": [
+    "contract",
+    "api",
+    "cli",
+    "ui",
+    "e2e"
+  ],
+  "scripts": {
+    "compact": "npm run compact --workspace @quietbooks/contract",
+    "build": "npm run build --workspace @quietbooks/contract && npm run build --workspace @quietbooks/api && npm run build --workspace @quietbooks/cli",
+    "test": "npm run test --workspace @quietbooks/contract",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "ui": "npm run dev --workspace @quietbooks/ui",
+    "cli": "npm run start --workspace @quietbooks/cli"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3",
+    "vitest": "2.1.9"
+  },
+  "overrides": {
+    "@midnight-ntwrk/onchain-runtime-v3": "3.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
