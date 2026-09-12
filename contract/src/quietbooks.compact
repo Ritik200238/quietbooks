@@ -1,0 +1,1086 @@
+// QuietBooks .. private B2B invoicing, settlement and selective audit on Midnight.
+//
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 QuietBooks contributors
+//
+// WHAT IS PRIVATE, AND WHY
+// ------------------------
+// Every commercial term of an invoice .. amount, tax, currency, line items, memo
+// and order reference .. lives in the parties' local private state. The ledger
+// stores only a hiding commitment to those terms plus nine per-field commitments
+// that make selective disclosure possible later. No amount is ever written to
+// public state by any circuit in this file.
+//
+// Settlement is deliberately NOT custodial in the private mode. This is a
+// consequence of the platform, not a shortcut, and the reasoning is recorded
+// here because it drove the whole design:
+//
+//   * `receiveShielded` requires its coin argument to be disclosed (see the
+//     official token-transfers example, which writes `receiveShielded(disclose(coin))`).
+//     A coin's `value` field is therefore public the moment a contract takes
+//     custody of it. Contract custody and hidden amounts are mutually exclusive
+//     on Midnight today.
+//   * There is no standard-library circuit that derives a Zswap note commitment
+//     from coin data, so a contract cannot re-derive a commitment in-circuit and
+//     bind it to a private amount.
+//   * `claimZswapCoinReceive(note)` does bind a transaction to a Zswap output
+//     using only the 32-byte note commitment. The commitment reveals nothing
+//     about value or recipient.
+//
+// So the private mode settles peer to peer .. a normal shielded wallet transfer,
+// where Zswap hides the amount .. and the contract atomically binds that transfer
+// to the invoice through its note commitment. The chain learns that invoice X was
+// settled by a real shielded output; it never learns for how much. An auditor
+// holding the opening can verify the amount exactly.
+//
+// The escrow mode is offered as the honest alternative for parties who want funds
+// actually locked by the contract. It takes custody, and it therefore makes the
+// escrowed amount public. The UI labels this plainly. Offering both, and being
+// explicit about the trade, is the point.
+//
+// IDENTITY
+// --------
+// Identity is derived from a 32-byte secret held in local private state, never
+// from `ownPublicKey()`. `ownPublicKey()` returns a prover-claimed value with no
+// cryptographic binding to the transaction signer, so any assertion resting on it
+// is bypassable. Party keys are PIN-rotatable: rotating the PIN yields a fresh
+// key and breaks linkability with the old one, at the cost of that key's history.
+
+pragma language_version 0.23;
+
+import CompactStandardLibrary;
+
+// ---------------------------------------------------------------------------
+// Domain separation
+//
+// Every hash and commitment in this contract is prefixed with a distinct tag so
+// that a digest produced for one purpose can never be replayed as another. The
+// version suffix lets a future revision change a derivation without colliding
+// with values already on the ledger.
+// ---------------------------------------------------------------------------
+
+export circuit tagParty(): Bytes<32> { return pad(32, "quietbooks:party:v1"); }
+export circuit tagAdmin(): Bytes<32> { return pad(32, "quietbooks:admin:v1"); }
+export circuit tagInvoiceId(): Bytes<32> { return pad(32, "quietbooks:invoice-id:v1"); }
+export circuit tagTerms(): Bytes<32> { return pad(32, "quietbooks:terms:v1"); }
+export circuit tagFieldRoot(): Bytes<32> { return pad(32, "quietbooks:field-root:v1"); }
+export circuit tagSettlement(): Bytes<32> { return pad(32, "quietbooks:settlement:v1"); }
+export circuit tagEscrowCoin(): Bytes<32> { return pad(32, "quietbooks:escrow-coin:v1"); }
+export circuit tagReliability(): Bytes<32> { return pad(32, "quietbooks:reliability:v1"); }
+
+// Per-field tags. The ordering is fixed and mirrors the scope bit positions in
+// `SCOPE_*` below; an auditor recomputes exactly these.
+export circuit tagFieldAmount(): Bytes<32> { return pad(32, "quietbooks:f:amount:v1"); }
+export circuit tagFieldTax(): Bytes<32> { return pad(32, "quietbooks:f:tax:v1"); }
+export circuit tagFieldDueDate(): Bytes<32> { return pad(32, "quietbooks:f:due:v1"); }
+export circuit tagFieldBuyer(): Bytes<32> { return pad(32, "quietbooks:f:buyer:v1"); }
+export circuit tagFieldSeller(): Bytes<32> { return pad(32, "quietbooks:f:seller:v1"); }
+export circuit tagFieldCurrency(): Bytes<32> { return pad(32, "quietbooks:f:currency:v1"); }
+export circuit tagFieldItems(): Bytes<32> { return pad(32, "quietbooks:f:items:v1"); }
+export circuit tagFieldMemo(): Bytes<32> { return pad(32, "quietbooks:f:memo:v1"); }
+export circuit tagFieldOrderRef(): Bytes<32> { return pad(32, "quietbooks:f:order:v1"); }
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export enum InvoiceStatus {
+  // Slot 0 is the default for the type. Keeping an explicit `nonexistent`
+  // variant means a zeroed struct can never be mistaken for a live invoice.
+  nonexistent,
+  issued,
+  settled,
+  cancelled,
+  escrowFunded,
+  disputed,
+  resolved,
+  refunded
+}
+
+export enum SettlementMode {
+  none,
+  // Peer-to-peer shielded transfer bound to this invoice by its Zswap note
+  // commitment. Amount hidden from the ledger.
+  privateNote,
+  // Seller attests receipt without an in-transaction note binding. Used when
+  // the payment happened out of band, or on a rail the contract cannot observe.
+  attested,
+  // Contract custody. Amount is public. See the header.
+  escrow
+}
+
+export enum DisputeOutcome {
+  undecided,
+  forSeller,
+  forBuyer
+}
+
+// The public record of an invoice. Contains no commercial value of any kind:
+// every number here is either a timestamp, a status, or a 32-byte digest.
+export struct InvoiceAnchor {
+  status: InvoiceStatus,
+  // persistentCommit(TermsFrame, termsSalt) .. binds amount, tax, currency,
+  // order reference, item hash and memo hash to this invoice's identity.
+  terms: Bytes<32>,
+  // persistentHash over the nine per-field commitments, in SCOPE bit order.
+  fieldRoot: Bytes<32>,
+  sellerKey: Bytes<32>,
+  buyerKey: Bytes<32>,
+  // Zero when the invoice has no arbiter. A dispute can only be resolved when
+  // an arbiter was named at issuance, so neither party can appoint one later.
+  arbiterKey: Bytes<32>,
+  issuedAt: Uint<64>,
+  dueDate: Uint<64>,
+  settledAt: Uint<64>,
+  // Governs `refundEscrow`. Zero when the invoice is not escrow-funded.
+  escrowDeadline: Uint<64>,
+  rulesVersion: Uint<8>
+}
+
+// What the ledger records about a settlement. `note` is a Zswap coin commitment
+// for `privateNote`, a caller-supplied receipt digest for `attested`, and the
+// escrow coin commitment for `escrow`.
+export struct Settlement {
+  mode: SettlementMode,
+  note: Bytes<32>,
+  // persistentCommit over (invoiceId, note, payerKey) .. lets an auditor confirm
+  // the settlement belongs to this invoice and this payer without either being
+  // recomputable from the digest alone.
+  receipt: Bytes<32>,
+  settledAt: Uint<64>,
+  onTime: Boolean
+}
+
+// An auditor's permission to see specific fields of one invoice, for a limited
+// time. Modelled on the qualified-invoice audit flow: the auditor never touches
+// the chain to read data, they recompute commitments from an envelope the seller
+// hands them and check those commitments against this grant.
+export struct AuditGrant {
+  // persistentHash of the symmetric audit key the seller shares out of band.
+  // The key itself never reaches the ledger.
+  auditKeyHash: Bytes<32>,
+  // One slot per disclosable field, in the scope order documented above. Fields
+  // whose slot is false must stay masked in the envelope, and a validator
+  // rejects an envelope that discloses more than its grant allows.
+  scopes: Vector<9, Boolean>,
+  grantedAt: Uint<64>,
+  expiresAt: Uint<64>,
+  revoked: Boolean
+}
+
+// Counts only. No amounts, ever. These back the reliability proof, which lets a
+// party show a counterparty "I settle on time" without opening a single invoice.
+export struct Reliability {
+  settled: Uint<64>,
+  settledOnTime: Uint<64>,
+  cancelled: Uint<64>,
+  disputesOpened: Uint<64>,
+  disputesLost: Uint<64>
+}
+
+// The private commercial terms. This struct is witness data. It is never a
+// circuit return value and never reaches the ledger.
+export struct InvoiceTerms {
+  amount: Uint<128>,
+  taxAmount: Uint<128>,
+  currency: Bytes<32>,
+  orderRef: Bytes<32>,
+  itemsHash: Bytes<32>,
+  memoHash: Bytes<32>
+}
+
+// The frame the terms commitment is taken over. Binding the invoice identity and
+// both party keys into the frame means a commitment lifted from one invoice
+// cannot be replayed onto another.
+export struct TermsFrame {
+  invoiceId: Bytes<32>,
+  sellerKey: Bytes<32>,
+  buyerKey: Bytes<32>,
+  dueDate: Uint<64>,
+  terms: InvoiceTerms
+}
+
+// ---------------------------------------------------------------------------
+// Audit scopes.
+//
+// A grant is a nine-slot boolean vector, one slot per disclosable field, in the
+// fixed order used everywhere in this contract:
+//
+//   0 amount   1 tax     2 dueDate   3 buyer   4 seller
+//   5 currency 6 items   7 memo      8 orderRef
+//
+// Compact has no bitwise operators .. arithmetic is `+`, `-` and `*` only .. so
+// an integer bitmask cannot be tested in-circuit. The vector is the honest
+// representation of the same idea and reads better at the call site. The
+// off-chain envelope format still carries a bitmask, because JSON and a
+// nine-element array are equally expressive and a mask is what auditors expect;
+// the TypeScript layer converts between the two.
+// ---------------------------------------------------------------------------
+
+export circuit SCOPE_COUNT(): Uint<8> { return 9; }
+
+// The rule set version enforced by `issueInvoice`. Bumping this signals to
+// auditors that the acceptance criteria changed.
+export circuit RULES_VERSION(): Uint<8> { return 1; }
+
+// ---------------------------------------------------------------------------
+// Ledger
+// ---------------------------------------------------------------------------
+
+// Immutable per-deployment salt. Mixed into every party key so the same wallet
+// secret yields different identities on different deployments, which stops an
+// observer correlating a party across contracts.
+export sealed ledger instanceSalt: Bytes<32>;
+
+// Administrative identity, as a derived key. Holds only the pause switch and its
+// own rotation .. it can never move funds, read terms, or alter an invoice.
+export ledger admin: Bytes<32>;
+
+// Emergency stop for state-advancing circuits. Reads and audit revocation stay
+// available while paused so nobody is locked away from their own records.
+export ledger paused: Boolean;
+
+export ledger invoices: Map<Bytes<32>, InvoiceAnchor>;
+export ledger settlements: Map<Bytes<32>, Settlement>;
+export ledger auditGrants: Map<Bytes<32>, AuditGrant>;
+export ledger reliability: Map<Bytes<32>, Reliability>;
+
+// Escrow custody. Present only for the escrow mode, and the reason that mode
+// makes amounts public: a `QualifiedShieldedCoinInfo` carries a plaintext value.
+export ledger escrowVault: Map<Bytes<32>, QualifiedShieldedCoinInfo>;
+
+// Dispute outcomes, kept out of the anchor so resolving one does not rewrite the
+// invoice record.
+export ledger disputes: Map<Bytes<32>, DisputeOutcome>;
+
+// Aggregate counters for the public dashboard. Increment-only, and readable by
+// the indexer without opening anything.
+export ledger issuedCount: Counter;
+export ledger settledCount: Counter;
+export ledger cancelledCount: Counter;
+export ledger disputedCount: Counter;
+
+// ---------------------------------------------------------------------------
+// Witnesses .. supplied by the local wallet, never transmitted.
+// ---------------------------------------------------------------------------
+
+// The wallet's root secret. Every identity this contract recognises is a
+// domain-separated hash of it.
+witness localSecret(): Bytes<32>;
+
+// The private commercial terms of the invoice being acted on.
+witness invoiceTerms(): InvoiceTerms;
+
+// Opening for the terms commitment. Must be fresh, 32 bytes, non-zero: the
+// commitment's hiding property rests on it.
+witness termsSalt(): Bytes<32>;
+
+// Per-field commitment openings, in SCOPE bit order:
+// amount, tax, dueDate, buyer, seller, currency, items, memo, orderRef.
+witness fieldSalts(): Vector<9, Bytes<32>>;
+
+// Opening for the invoice identifier, which is a commitment rather than a
+// counter so that identifiers are unlinkable and unguessable.
+witness invoiceNonce(): Bytes<32>;
+
+// Opening for a settlement receipt.
+//
+// There is deliberately no witness for the escrowed coin. `escrowVault` holds a
+// `QualifiedShieldedCoinInfo` in public ledger state, so release and refund read
+// the coin from the ledger rather than trusting the caller to present it. That
+// is the same trade `ShieldedTreasury` makes: the value is public either way
+// once the contract has custody, and reading it from state removes the failure
+// mode where a lost coin descriptor strands the funds forever.
+witness settlementSalt(): Bytes<32>;
+
+constructor(salt: Bytes<32>) {
+  // A zero salt would collapse this deployment's party keys onto any other
+  // zero-salted deployment, so refuse it. The field is sealed, so a mistake here
+  // would be permanent.
+  assert(disclose(salt) != default<Bytes<32>>, "quietbooks: instance salt must be non-zero");
+  instanceSalt = disclose(salt);
+  admin = disclose(deriveAdminKeyWith(disclose(salt), localSecret()));
+  paused = false;
+}
+
+// ---------------------------------------------------------------------------
+// Identity derivation
+// ---------------------------------------------------------------------------
+
+// A party's public identity. PIN-rotatable: a different PIN yields an unrelated
+// key, which is how a party sheds a history that has become too linkable.
+//
+// Declared pure and taking the salt explicitly so that a wallet can derive the
+// same key off chain. The seller needs their own key to compute an invoice
+// identifier before any transaction exists, and a buyer needs to hand out a key
+// to be invoiced against; neither can call into a contract to get one. The
+// impure wrapper below is the convenience form for callers that already have a
+// deployment in hand.
+export pure circuit derivePartyKeyWith(
+  salt: Bytes<32>,
+  secret: Bytes<32>,
+  pin: Uint<64>
+): Bytes<32> {
+  return persistentHash<Vector<4, Bytes<32>>>([
+    tagParty(),
+    salt,
+    pin as Field as Bytes<32>,
+    secret
+  ]);
+}
+
+export pure circuit deriveAdminKeyWith(salt: Bytes<32>, secret: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>([
+    tagAdmin(),
+    salt,
+    secret
+  ]);
+}
+
+export circuit derivePartyKey(secret: Bytes<32>, pin: Uint<64>): Bytes<32> {
+  return derivePartyKeyWith(instanceSalt, secret, pin);
+}
+
+// The administrative identity. Not PIN-bound, so the role survives the admin
+// rotating their own party PIN.
+export circuit deriveAdminKey(secret: Bytes<32>): Bytes<32> {
+  return deriveAdminKeyWith(instanceSalt, secret);
+}
+
+// The caller's party key for a given PIN, from their own secret.
+circuit callerKey(pin: Uint<64>): Bytes<32> {
+  return derivePartyKeyWith(instanceSalt, localSecret(), pin);
+}
+
+circuit assertNotPaused(): [] {
+  assert(!paused, "quietbooks: contract is paused");
+}
+
+circuit assertAdmin(): [] {
+  assert(deriveAdminKeyWith(instanceSalt, localSecret()) == admin,
+         "quietbooks: caller is not the admin");
+}
+
+// ---------------------------------------------------------------------------
+// Commitments
+// ---------------------------------------------------------------------------
+
+// The invoice identifier. A commitment, not a sequence number: sequential ids
+// would leak issuance volume and let anyone probe for an invoice's existence.
+export circuit deriveInvoiceId(sellerKey: Bytes<32>, nonce: Bytes<32>): Bytes<32> {
+  return persistentCommit<Vector<2, Bytes<32>>>([tagInvoiceId(), sellerKey], nonce);
+}
+
+export circuit commitTerms(frame: TermsFrame, salt: Bytes<32>): Bytes<32> {
+  return persistentCommit<TermsFrame>(frame, salt);
+}
+
+// One field's commitment. The tag keeps a value committed as `amount` from ever
+// verifying as `tax`, even when the two happen to be numerically equal.
+export circuit commitField(tag: Bytes<32>, value: Bytes<32>, salt: Bytes<32>): Bytes<32> {
+  return persistentCommit<Vector<2, Bytes<32>>>([tag, value], salt);
+}
+
+// The nine per-field commitments, folded into one digest stored on the anchor.
+// An auditor recomputes the fields they were granted, takes the masked
+// commitments for the rest from the envelope, and rebuilds this exact root.
+export circuit commitFieldRoot(
+  frame: TermsFrame,
+  salts: Vector<9, Bytes<32>>
+): Bytes<32> {
+  const commits: Vector<9, Bytes<32>> = [
+    commitField(tagFieldAmount(),   frame.terms.amount as Field as Bytes<32>,    salts[0]),
+    commitField(tagFieldTax(),      frame.terms.taxAmount as Field as Bytes<32>, salts[1]),
+    commitField(tagFieldDueDate(),  frame.dueDate as Field as Bytes<32>,         salts[2]),
+    commitField(tagFieldBuyer(),    frame.buyerKey,                              salts[3]),
+    commitField(tagFieldSeller(),   frame.sellerKey,                             salts[4]),
+    commitField(tagFieldCurrency(), frame.terms.currency,                        salts[5]),
+    commitField(tagFieldItems(),    frame.terms.itemsHash,                       salts[6]),
+    commitField(tagFieldMemo(),     frame.terms.memoHash,                        salts[7]),
+    commitField(tagFieldOrderRef(), frame.terms.orderRef,                        salts[8])
+  ];
+  return persistentHash<Vector<10, Bytes<32>>>([
+    tagFieldRoot(),
+    commits[0], commits[1], commits[2], commits[3], commits[4],
+    commits[5], commits[6], commits[7], commits[8]
+  ]);
+}
+
+export circuit commitSettlementReceipt(
+  invoiceId: Bytes<32>,
+  note: Bytes<32>,
+  payerKey: Bytes<32>,
+  salt: Bytes<32>
+): Bytes<32> {
+  return persistentCommit<Vector<4, Bytes<32>>>(
+    [tagSettlement(), invoiceId, note, payerKey],
+    salt
+  );
+}
+
+// Binds an escrowed coin so that whoever releases it must present the same coin.
+// The digest hides the value; the vault entry does not, which is the documented
+// cost of escrow mode.
+export circuit commitEscrowCoin(coin: QualifiedShieldedCoinInfo): Bytes<32> {
+  return persistentHash<Vector<4, Bytes<32>>>([
+    tagEscrowCoin(),
+    coin.nonce,
+    coin.color,
+    coin.value as Field as Bytes<32>
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Rule set, version 1.
+//
+// These are enforced, not merely recorded. A transaction that violates one
+// cannot be produced, so the proof itself is the evidence the rules held .. which
+// is why the anchor stores only the rule set's version and not a result digest.
+// ---------------------------------------------------------------------------
+
+circuit assertTermsValid(frame: TermsFrame, issuedAt: Uint<64>): [] {
+  assert(frame.terms.amount > 0, "quietbooks: amount must be positive");
+  assert(frame.dueDate > issuedAt, "quietbooks: due date must be after issuance");
+  assert(frame.terms.currency != default<Bytes<32>>, "quietbooks: currency must be set");
+  assert(frame.sellerKey != frame.buyerKey, "quietbooks: seller and buyer must differ");
+  assert(frame.sellerKey != default<Bytes<32>>, "quietbooks: seller key must be set");
+  assert(frame.buyerKey != default<Bytes<32>>, "quietbooks: buyer key must be set");
+  // Tax is expressed on top of the principal. Allowing it to exceed the
+  // principal admits no real invoice and would let a payer be over-charged
+  // through a malformed envelope the auditor could not distinguish from a
+  // legitimate one.
+  assert(frame.terms.taxAmount <= frame.terms.amount, "quietbooks: tax cannot exceed amount");
+}
+
+// ---------------------------------------------------------------------------
+// Reliability counters
+// ---------------------------------------------------------------------------
+
+circuit readReliability(key: Bytes<32>): Reliability {
+  if (!reliability.member(key)) {
+    return Reliability {
+      settled: 0 as Uint<64>,
+      settledOnTime: 0 as Uint<64>,
+      cancelled: 0 as Uint<64>,
+      disputesOpened: 0 as Uint<64>,
+      disputesLost: 0 as Uint<64>
+    };
+  }
+  return reliability.lookup(key);
+}
+
+circuit bumpSettled(key: Bytes<32>, onTime: Boolean): [] {
+  const r = readReliability(key);
+  reliability.insert(key, Reliability {
+    settled: (r.settled + 1) as Uint<64>,
+    settledOnTime: onTime ? ((r.settledOnTime + 1) as Uint<64>) : r.settledOnTime,
+    cancelled: r.cancelled,
+    disputesOpened: r.disputesOpened,
+    disputesLost: r.disputesLost
+  });
+}
+
+circuit bumpCancelled(key: Bytes<32>): [] {
+  const r = readReliability(key);
+  reliability.insert(key, Reliability {
+    settled: r.settled,
+    settledOnTime: r.settledOnTime,
+    cancelled: (r.cancelled + 1) as Uint<64>,
+    disputesOpened: r.disputesOpened,
+    disputesLost: r.disputesLost
+  });
+}
+
+circuit bumpDisputeOpened(key: Bytes<32>): [] {
+  const r = readReliability(key);
+  reliability.insert(key, Reliability {
+    settled: r.settled,
+    settledOnTime: r.settledOnTime,
+    cancelled: r.cancelled,
+    disputesOpened: (r.disputesOpened + 1) as Uint<64>,
+    disputesLost: r.disputesLost
+  });
+}
+
+circuit bumpDisputeLost(key: Bytes<32>): [] {
+  const r = readReliability(key);
+  reliability.insert(key, Reliability {
+    settled: r.settled,
+    settledOnTime: r.settledOnTime,
+    cancelled: r.cancelled,
+    disputesOpened: r.disputesOpened,
+    disputesLost: (r.disputesLost + 1) as Uint<64>
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Invoice lifecycle
+// ---------------------------------------------------------------------------
+
+// Issue an invoice. Called by the seller.
+//
+// Public:  the invoice identifier, both party keys, the arbiter key, the two
+//          timestamps, and three digests.
+// Private: amount, tax, currency, order reference, item hash, memo hash, and
+//          every commitment opening.
+//
+// The commitments are computed in-circuit from witness data rather than accepted
+// as arguments, so what the ledger records can never drift from what the seller's
+// wallet actually holds.
+export circuit issueInvoice(
+  sellerPin: Uint<64>,
+  buyerKey: Bytes<32>,
+  arbiterKey: Bytes<32>,
+  dueDate: Uint<64>,
+  issuedAt: Uint<64>
+): Bytes<32> {
+  assertNotPaused();
+
+  const sellerKey = callerKey(sellerPin);
+  const nonce = invoiceNonce();
+  const invoiceId = deriveInvoiceId(sellerKey, nonce);
+
+  assert(!invoices.member(disclose(invoiceId)), "quietbooks: invoice id already used");
+
+  const frame = TermsFrame {
+    invoiceId: invoiceId,
+    sellerKey: sellerKey,
+    buyerKey: disclose(buyerKey),
+    dueDate: disclose(dueDate),
+    terms: invoiceTerms()
+  };
+
+  assertTermsValid(frame, disclose(issuedAt));
+
+  invoices.insert(disclose(invoiceId), InvoiceAnchor {
+    status: InvoiceStatus.issued,
+    terms: disclose(commitTerms(frame, termsSalt())),
+    fieldRoot: disclose(commitFieldRoot(frame, fieldSalts())),
+    sellerKey: disclose(sellerKey),
+    buyerKey: disclose(buyerKey),
+    arbiterKey: disclose(arbiterKey),
+    issuedAt: disclose(issuedAt),
+    dueDate: disclose(dueDate),
+    settledAt: 0 as Uint<64>,
+    escrowDeadline: 0 as Uint<64>,
+    rulesVersion: RULES_VERSION()
+  });
+
+  issuedCount.increment(1);
+  return disclose(invoiceId);
+}
+
+// Prove the caller holds the terms behind an invoice's commitment. Used by every
+// settlement path: it is what stops a party from settling an invoice whose terms
+// they cannot actually open, and it is the only reason the contract can be sure
+// the hidden amount it never sees is the one both sides agreed to.
+circuit assertHoldsTerms(invoiceId: Bytes<32>, anchor: InvoiceAnchor): [] {
+  const frame = TermsFrame {
+    invoiceId: invoiceId,
+    sellerKey: anchor.sellerKey,
+    buyerKey: anchor.buyerKey,
+    dueDate: anchor.dueDate,
+    terms: invoiceTerms()
+  };
+  assert(commitTerms(frame, termsSalt()) == anchor.terms,
+         "quietbooks: terms do not open the recorded commitment");
+}
+
+// Settle by binding a shielded transfer made in this same transaction.
+//
+// The buyer's wallet creates a shielded output to the seller for the invoice
+// amount. Zswap hides that amount. The buyer passes the output's note commitment
+// here; `claimZswapCoinReceive` refuses the transaction unless that commitment is
+// genuinely present, and refuses to let two calls claim the same one.
+//
+// What an observer learns: that invoice X was settled, and a 32-byte commitment.
+// Not the amount, not the recipient. An auditor given the coin's opening can
+// verify both.
+export circuit settleWithNote(
+  invoiceId: Bytes<32>,
+  buyerPin: Uint<64>,
+  note: Bytes<32>,
+  settledAt: Uint<64>
+): [] {
+  assertNotPaused();
+  const id = disclose(invoiceId);
+  const at = disclose(settledAt);
+  const n = disclose(note);
+
+  assert(n != default<Bytes<32>>, "quietbooks: note commitment must be non-zero");
+  assert(invoices.member(id), "quietbooks: unknown invoice");
+
+  const anchor = invoices.lookup(id);
+  assert(anchor.status == InvoiceStatus.issued, "quietbooks: invoice is not open for settlement");
+
+  const buyerKey = callerKey(buyerPin);
+  assert(disclose(buyerKey) == anchor.buyerKey, "quietbooks: caller is not the buyer");
+
+  assertHoldsTerms(id, anchor);
+
+  // Bind the transfer. Without this the status change would be a bare assertion
+  // by the payer; with it, the ledger itself refuses the claim unless a real
+  // shielded output exists in the containing transaction.
+  kernel.claimZswapCoinReceive(n);
+
+  const onTime = at <= anchor.dueDate;
+
+  settlements.insert(id, Settlement {
+    mode: SettlementMode.privateNote,
+    note: n,
+    receipt: disclose(commitSettlementReceipt(id, n, buyerKey, settlementSalt())),
+    settledAt: at,
+    onTime: onTime
+  });
+
+  invoices.insert(id, withStatus(anchor, InvoiceStatus.settled, at));
+  bumpSettled(anchor.sellerKey, onTime);
+  settledCount.increment(1);
+}
+
+// Settle by seller attestation, for payments the contract cannot observe: a bank
+// transfer, a transfer made in an earlier block, or any off-chain rail.
+//
+// Only the seller may call this. That is deliberate .. the seller is the party
+// who loses if they mark an unpaid invoice as settled, so the incentive points
+// the right way. The receipt digest is whatever reference the seller wants an
+// auditor to be able to check.
+export circuit settleAttested(
+  invoiceId: Bytes<32>,
+  sellerPin: Uint<64>,
+  receiptDigest: Bytes<32>,
+  settledAt: Uint<64>
+): [] {
+  assertNotPaused();
+  const id = disclose(invoiceId);
+  const at = disclose(settledAt);
+
+  assert(invoices.member(id), "quietbooks: unknown invoice");
+  const anchor = invoices.lookup(id);
+  assert(anchor.status == InvoiceStatus.issued, "quietbooks: invoice is not open for settlement");
+
+  const sellerKey = callerKey(sellerPin);
+  assert(disclose(sellerKey) == anchor.sellerKey, "quietbooks: caller is not the seller");
+
+  assertHoldsTerms(id, anchor);
+
+  const onTime = at <= anchor.dueDate;
+
+  settlements.insert(id, Settlement {
+    mode: SettlementMode.attested,
+    note: disclose(receiptDigest),
+    receipt: disclose(commitSettlementReceipt(id, receiptDigest, sellerKey, settlementSalt())),
+    settledAt: at,
+    onTime: onTime
+  });
+
+  invoices.insert(id, withStatus(anchor, InvoiceStatus.settled, at));
+  bumpSettled(anchor.sellerKey, onTime);
+  settledCount.increment(1);
+}
+
+// Rebuilds an anchor with a new status and settlement time. Compact has no
+// record-update syntax, so every field is restated; keeping that in one place
+// stops a future edit from silently dropping one.
+circuit withStatus(a: InvoiceAnchor, status: InvoiceStatus, settledAt: Uint<64>): InvoiceAnchor {
+  return InvoiceAnchor {
+    status: status,
+    terms: a.terms,
+    fieldRoot: a.fieldRoot,
+    sellerKey: a.sellerKey,
+    buyerKey: a.buyerKey,
+    arbiterKey: a.arbiterKey,
+    issuedAt: a.issuedAt,
+    dueDate: a.dueDate,
+    settledAt: settledAt,
+    escrowDeadline: a.escrowDeadline,
+    rulesVersion: a.rulesVersion
+  };
+}
+
+circuit withEscrow(a: InvoiceAnchor, status: InvoiceStatus, deadline: Uint<64>): InvoiceAnchor {
+  return InvoiceAnchor {
+    status: status,
+    terms: a.terms,
+    fieldRoot: a.fieldRoot,
+    sellerKey: a.sellerKey,
+    buyerKey: a.buyerKey,
+    arbiterKey: a.arbiterKey,
+    issuedAt: a.issuedAt,
+    dueDate: a.dueDate,
+    settledAt: a.settledAt,
+    escrowDeadline: deadline,
+    rulesVersion: a.rulesVersion
+  };
+}
+
+// Cancel an unpaid invoice. Seller only, and only while it is still open .. a
+// settled invoice is a record of something that happened and must not be
+// retractable.
+export circuit cancelInvoice(invoiceId: Bytes<32>, sellerPin: Uint<64>): [] {
+  assertNotPaused();
+  const id = disclose(invoiceId);
+
+  assert(invoices.member(id), "quietbooks: unknown invoice");
+  const anchor = invoices.lookup(id);
+  assert(anchor.status == InvoiceStatus.issued, "quietbooks: only an open invoice can be cancelled");
+
+  const sellerKey = callerKey(sellerPin);
+  assert(disclose(sellerKey) == anchor.sellerKey, "quietbooks: caller is not the seller");
+
+  invoices.insert(id, withStatus(anchor, InvoiceStatus.cancelled, anchor.settledAt));
+  bumpCancelled(anchor.sellerKey);
+  cancelledCount.increment(1);
+}
+
+// ---------------------------------------------------------------------------
+// Escrow mode.
+//
+// The contract takes custody. `receiveShielded` discloses the coin, so the
+// escrowed value is public for as long as it is held, and the vault entry keeps
+// it public afterwards. Parties choose this only when a locked balance matters
+// more than a hidden one; the interface says so before they commit.
+// ---------------------------------------------------------------------------
+
+// Buyer locks the payment with the contract.
+export circuit fundEscrow(
+  invoiceId: Bytes<32>,
+  buyerPin: Uint<64>,
+  coin: ShieldedCoinInfo,
+  deadline: Uint<64>,
+  fundedAt: Uint<64>
+): [] {
+  assertNotPaused();
+  const id = disclose(invoiceId);
+
+  assert(invoices.member(id), "quietbooks: unknown invoice");
+  const anchor = invoices.lookup(id);
+  assert(anchor.status == InvoiceStatus.issued, "quietbooks: invoice is not open for escrow");
+
+  const buyerKey = callerKey(buyerPin);
+  assert(disclose(buyerKey) == anchor.buyerKey, "quietbooks: caller is not the buyer");
+
+  assertHoldsTerms(id, anchor);
+
+  assert(disclose(deadline) > disclose(fundedAt), "quietbooks: escrow deadline must be in the future");
+  assert(disclose(coin).value > 0, "quietbooks: escrowed amount must be positive");
+
+  // The coin must appear as an output addressed to this contract in this
+  // transaction, or the ledger rejects the call.
+  receiveShielded(disclose(coin));
+  escrowVault.insertCoin(id, disclose(coin), right<ZswapCoinPublicKey, ContractAddress>(kernel.self()));
+
+  invoices.insert(id, withEscrow(anchor, InvoiceStatus.escrowFunded, disclose(deadline)));
+}
+
+// Buyer confirms delivery and the contract pays the seller.
+export circuit releaseEscrow(
+  invoiceId: Bytes<32>,
+  buyerPin: Uint<64>,
+  sellerPayout: ZswapCoinPublicKey,
+  releasedAt: Uint<64>
+): [] {
+  assertNotPaused();
+  const id = disclose(invoiceId);
+  const at = disclose(releasedAt);
+
+  assert(invoices.member(id), "quietbooks: unknown invoice");
+  const anchor = invoices.lookup(id);
+  assert(anchor.status == InvoiceStatus.escrowFunded, "quietbooks: invoice has no funded escrow");
+
+  const buyerKey = callerKey(buyerPin);
+  assert(disclose(buyerKey) == anchor.buyerKey, "quietbooks: caller is not the buyer");
+
+  assert(escrowVault.member(id), "quietbooks: escrow vault entry missing");
+  const held = escrowVault.lookup(id);
+
+  sendShielded(held, left<ZswapCoinPublicKey, ContractAddress>(disclose(sellerPayout)), held.value);
+  escrowVault.remove(id);
+
+  const onTime = at <= anchor.dueDate;
+  settlements.insert(id, Settlement {
+    mode: SettlementMode.escrow,
+    note: commitEscrowCoin(held),
+    receipt: disclose(commitSettlementReceipt(id, commitEscrowCoin(held), buyerKey, settlementSalt())),
+    settledAt: at,
+    onTime: onTime
+  });
+
+  invoices.insert(id, withStatus(anchor, InvoiceStatus.settled, at));
+  bumpSettled(anchor.sellerKey, onTime);
+  settledCount.increment(1);
+}
+
+// After the deadline, the buyer takes their money back. Only the buyer may call
+// this, and only once the deadline has genuinely passed on chain .. the time is
+// read from the block, not from an argument, so it cannot be forged.
+export circuit refundEscrow(
+  invoiceId: Bytes<32>,
+  buyerPin: Uint<64>,
+  buyerPayout: ZswapCoinPublicKey
+): [] {
+  assertNotPaused();
+  const id = disclose(invoiceId);
+
+  assert(invoices.member(id), "quietbooks: unknown invoice");
+  const anchor = invoices.lookup(id);
+  assert(anchor.status == InvoiceStatus.escrowFunded, "quietbooks: invoice has no funded escrow");
+
+  const buyerKey = callerKey(buyerPin);
+  assert(disclose(buyerKey) == anchor.buyerKey, "quietbooks: caller is not the buyer");
+
+  assert(blockTimeGt(anchor.escrowDeadline), "quietbooks: escrow deadline has not passed");
+
+  assert(escrowVault.member(id), "quietbooks: escrow vault entry missing");
+  const held = escrowVault.lookup(id);
+
+  sendShielded(held, left<ZswapCoinPublicKey, ContractAddress>(disclose(buyerPayout)), held.value);
+  escrowVault.remove(id);
+
+  invoices.insert(id, withEscrow(anchor, InvoiceStatus.refunded, anchor.escrowDeadline));
+}
+
+// ---------------------------------------------------------------------------
+// Disputes
+// ---------------------------------------------------------------------------
+
+// Either party opens a dispute on a funded escrow. Requires an arbiter to have
+// been named when the invoice was issued, so a party cannot manufacture a forum
+// after the fact.
+export circuit openDispute(invoiceId: Bytes<32>, partyPin: Uint<64>): [] {
+  assertNotPaused();
+  const id = disclose(invoiceId);
+
+  assert(invoices.member(id), "quietbooks: unknown invoice");
+  const anchor = invoices.lookup(id);
+  assert(anchor.status == InvoiceStatus.escrowFunded, "quietbooks: only a funded escrow can be disputed");
+  assert(anchor.arbiterKey != default<Bytes<32>>, "quietbooks: invoice has no arbiter");
+
+  const partyKey = disclose(callerKey(partyPin));
+  assert(partyKey == anchor.sellerKey || partyKey == anchor.buyerKey,
+         "quietbooks: caller is not a party to this invoice");
+
+  disputes.insert(id, DisputeOutcome.undecided);
+  invoices.insert(id, withEscrow(anchor, InvoiceStatus.disputed, anchor.escrowDeadline));
+  bumpDisputeOpened(partyKey);
+  disputedCount.increment(1);
+}
+
+// The named arbiter decides, and the escrowed coin moves in the same call. The
+// arbiter never learns the invoice terms: they rule on evidence exchanged off
+// chain and the contract only lets them choose a direction.
+export circuit resolveDispute(
+  invoiceId: Bytes<32>,
+  arbiterPin: Uint<64>,
+  forSeller: Boolean,
+  payout: ZswapCoinPublicKey,
+  resolvedAt: Uint<64>
+): [] {
+  assertNotPaused();
+  const id = disclose(invoiceId);
+  const at = disclose(resolvedAt);
+
+  assert(invoices.member(id), "quietbooks: unknown invoice");
+  const anchor = invoices.lookup(id);
+  assert(anchor.status == InvoiceStatus.disputed, "quietbooks: invoice is not under dispute");
+
+  const arbiterKey = disclose(callerKey(arbiterPin));
+  assert(arbiterKey == anchor.arbiterKey, "quietbooks: caller is not the named arbiter");
+
+  assert(escrowVault.member(id), "quietbooks: escrow vault entry missing");
+  const held = escrowVault.lookup(id);
+
+  sendShielded(held, left<ZswapCoinPublicKey, ContractAddress>(disclose(payout)), held.value);
+  escrowVault.remove(id);
+
+  const decided = disclose(forSeller);
+  disputes.insert(id, decided ? DisputeOutcome.forSeller : DisputeOutcome.forBuyer);
+
+  // The losing side carries the mark. A seller who loses failed to deliver; a
+  // buyer who loses withheld payment that was owed.
+  bumpDisputeLost(decided ? anchor.buyerKey : anchor.sellerKey);
+
+  if (decided) {
+    // A seller who wins a dispute has been paid, so the invoice gets a
+    // settlement record like every other payment path. Without one it would
+    // count toward the settled totals and the seller's reliability while
+    // leaving nothing for an auditor to look at, which is the sort of
+    // asymmetry that turns into a reconciliation bug a year later.
+    //
+    // The receipt is deliberately zero rather than a commitment. A receipt
+    // commits to the payer's identity under a salt only that payer holds, and
+    // the arbiter is neither party and never receives the invoice openings.
+    // Publishing a digest that hides nothing would be worse than publishing an
+    // explicit absence: an auditor reading a zero receipt knows immediately
+    // that this settlement was decided rather than paid.
+    settlements.insert(id, Settlement {
+      mode: SettlementMode.escrow,
+      note: commitEscrowCoin(held),
+      receipt: default<Bytes<32>>,
+      settledAt: at,
+      onTime: at <= anchor.dueDate
+    });
+    bumpSettled(anchor.sellerKey, at <= anchor.dueDate);
+    settledCount.increment(1);
+  }
+
+  invoices.insert(id, withStatus(anchor, InvoiceStatus.resolved, at));
+}
+
+// ---------------------------------------------------------------------------
+// Selective audit
+// ---------------------------------------------------------------------------
+
+// The seller grants an auditor sight of specific fields, until a deadline.
+//
+// The audit key itself never touches the chain .. only its hash. The seller hands
+// the key to the auditor out of band along with an encrypted envelope; the
+// auditor decrypts, recomputes the per-field commitments for the fields in
+// `scopes`, and checks them against the `fieldRoot` already on this invoice's
+// anchor. The chain's role is to pin what was authorised, by whom, and until when.
+export circuit grantAudit(
+  invoiceId: Bytes<32>,
+  sellerPin: Uint<64>,
+  auditKeyHash: Bytes<32>,
+  scopes: Vector<9, Boolean>,
+  expiresAt: Uint<64>,
+  grantedAt: Uint<64>
+): [] {
+  assertNotPaused();
+  const id = disclose(invoiceId);
+
+  assert(invoices.member(id), "quietbooks: unknown invoice");
+  const anchor = invoices.lookup(id);
+
+  const sellerKey = callerKey(sellerPin);
+  assert(disclose(sellerKey) == anchor.sellerKey, "quietbooks: caller is not the seller");
+
+  assert(disclose(auditKeyHash) != default<Bytes<32>>, "quietbooks: audit key hash must be set");
+  assert(anyScope(disclose(scopes)), "quietbooks: grant must disclose at least one field");
+  assert(disclose(expiresAt) > disclose(grantedAt), "quietbooks: grant must expire in the future");
+
+  auditGrants.insert(id, AuditGrant {
+    auditKeyHash: disclose(auditKeyHash),
+    scopes: disclose(scopes),
+    grantedAt: disclose(grantedAt),
+    expiresAt: disclose(expiresAt),
+    revoked: false
+  });
+}
+
+// True when at least one slot is set. A grant that discloses nothing is almost
+// certainly a mistake in the caller, so it is refused rather than stored.
+circuit anyScope(s: Vector<9, Boolean>): Boolean {
+  return s[0] || s[1] || s[2] || s[3] || s[4] || s[5] || s[6] || s[7] || s[8];
+}
+
+// True when every slot requested is also granted. Written out rather than
+// folded so the failure is easy to read in a test and the constraint count is
+// obvious: nine implications, no loop.
+circuit scopesCover(granted: Vector<9, Boolean>, requested: Vector<9, Boolean>): Boolean {
+  return (!requested[0] || granted[0])
+      && (!requested[1] || granted[1])
+      && (!requested[2] || granted[2])
+      && (!requested[3] || granted[3])
+      && (!requested[4] || granted[4])
+      && (!requested[5] || granted[5])
+      && (!requested[6] || granted[6])
+      && (!requested[7] || granted[7])
+      && (!requested[8] || granted[8]);
+}
+
+// Revoke early. Works while paused: a seller who needs to withdraw an auditor's
+// access should never be blocked by an unrelated emergency stop.
+export circuit revokeAudit(invoiceId: Bytes<32>, sellerPin: Uint<64>): [] {
+  const id = disclose(invoiceId);
+
+  assert(invoices.member(id), "quietbooks: unknown invoice");
+  const anchor = invoices.lookup(id);
+
+  const sellerKey = callerKey(sellerPin);
+  assert(disclose(sellerKey) == anchor.sellerKey, "quietbooks: caller is not the seller");
+
+  assert(auditGrants.member(id), "quietbooks: no audit grant for this invoice");
+  const g = auditGrants.lookup(id);
+
+  auditGrants.insert(id, AuditGrant {
+    auditKeyHash: g.auditKeyHash,
+    scopes: g.scopes,
+    grantedAt: g.grantedAt,
+    expiresAt: g.expiresAt,
+    revoked: true
+  });
+}
+
+// Read-side helper for the validator: is this grant usable right now, for these
+// fields? Keeping the check on chain means a validator and a wallet cannot drift
+// apart on what "still valid" means.
+export circuit auditGrantCovers(
+  invoiceId: Bytes<32>,
+  requestedScopes: Vector<9, Boolean>
+): Boolean {
+  const id = disclose(invoiceId);
+  const requested = disclose(requestedScopes);
+
+  // An empty request is vacuously covered under ordinary subset semantics, and
+  // that is exactly the wrong answer to return to a validator. A caller asking
+  // "may I see nothing" has almost certainly built its request vector wrongly,
+  // and a true here would let a malformed envelope look authorised. Answering
+  // false makes the mistake visible at the point it happens.
+  if (!anyScope(requested)) { return false; }
+
+  if (!auditGrants.member(id)) { return false; }
+  const g = auditGrants.lookup(id);
+  if (g.revoked) { return false; }
+  if (!blockTimeLt(g.expiresAt)) { return false; }
+  return scopesCover(g.scopes, requested);
+}
+
+// ---------------------------------------------------------------------------
+// Reliability proof
+// ---------------------------------------------------------------------------
+
+// Prove a settlement record clears a threshold, without opening a single
+// invoice. A supplier shows a prospective customer "at least N invoices settled,
+// at least M of them on time, no more than D disputes lost" and the customer
+// learns nothing else .. not who the counterparties were, not the amounts, not
+// even which invoices are being counted.
+//
+// The counters are read from the ledger rather than supplied by the prover,
+// which is what separates this from a self-reported claim.
+export circuit proveReliability(
+  partyPin: Uint<64>,
+  minSettled: Uint<64>,
+  minOnTime: Uint<64>,
+  maxDisputesLost: Uint<64>
+): Boolean {
+  const key = disclose(callerKey(partyPin));
+  const r = readReliability(key);
+  return r.settled >= disclose(minSettled)
+      && r.settledOnTime >= disclose(minOnTime)
+      && r.disputesLost <= disclose(maxDisputesLost);
+}
+
+// Read a party's counters. Public by construction .. they are counts held in
+// public ledger state .. and exposed as a circuit so a caller gets a consistent
+// snapshot including the zero case for a party with no history.
+export circuit readReliabilityOf(partyKey: Bytes<32>): Reliability {
+  return readReliability(disclose(partyKey));
+}
+
+// ---------------------------------------------------------------------------
+// Administration
+// ---------------------------------------------------------------------------
+
+// Hand the role to a key the next admin already controls. No private key ever
+// moves between the two parties.
+export circuit rotateAdmin(newAdmin: Bytes<32>): [] {
+  assertAdmin();
+  assert(disclose(newAdmin) != default<Bytes<32>>, "quietbooks: new admin must be set");
+  admin = disclose(newAdmin);
+}
+
+export circuit setPaused(value: Boolean): [] {
+  assertAdmin();
+  paused = disclose(value);
+}
