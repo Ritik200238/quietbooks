@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  // Emitting needs the sibling packages as declarations, not as sources: a
+  // source-mapped `@quietbooks/contract` would be pulled into the program and
+  // tsc would refuse to emit files that sit outside `rootDir`. Both packages
+  // are built before this one by the workspace's own `build` script, so the
+  // declarations are there by the time this config is used.
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "paths": {
+      "@quietbooks/api": ["../api/dist/index.d.ts"],
+      "@quietbooks/contract": ["../contract/dist/src/index.d.ts"]
+    }
+  },
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+}

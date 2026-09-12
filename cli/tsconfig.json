@@ -1,0 +1,37 @@
+{
+  // The two workspace packages are resolved from their TypeScript sources rather
+  // than from their built `dist` output. That is what lets `npm run standalone`
+  // work on a fresh clone with no build step, and it also keeps the CLI honest:
+  // it is typechecked against the code that actually ships, not against a `.d.ts`
+  // that may be one build behind.
+  //
+  // `tsconfig.build.json` overrides these to point at the built declarations, so
+  // that emitting the CLI does not drag the sibling packages into its output.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "sourceMap": true,
+    // No `rootDir` here on purpose: this config resolves the sibling packages
+    // from source, so they join the program, and a rootDir of `src` would make
+    // tsc complain about every one of their files. `tsconfig.build.json` sets it,
+    // where it matters because that config emits.
+    "noEmit": true,
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@quietbooks/api": ["../api/src/index.ts"],
+      "@quietbooks/contract": ["../contract/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

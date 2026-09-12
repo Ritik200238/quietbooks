@@ -1,0 +1,5 @@
+# Build output and session logs. The logs hold wallet addresses, seeds and
+# indexer traffic from real runs, so they stay out of the repository.
+dist/
+logs/
+node_modules/
