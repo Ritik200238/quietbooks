@@ -14,8 +14,12 @@
   ],
   "scripts": {
     "compact": "npm run compact --workspace @quietbooks/contract",
-    "build": "npm run build --workspace @quietbooks/contract && npm run build --workspace @quietbooks/api && npm run build --workspace @quietbooks/cli",
+    "build": "npm run build --workspace @quietbooks/contract && npm run build --workspace @quietbooks/api && npm run build --workspace @quietbooks/cli && npm run build --workspace @quietbooks/e2e",
+    "build:ui": "npm run build --workspace @quietbooks/ui",
     "test": "npm run test --workspace @quietbooks/contract",
+    "e2e": "npm run e2e --workspace @quietbooks/e2e",
+    "localnet:up": "docker compose -f localnet/standalone.yml up -d",
+    "localnet:down": "docker compose -f localnet/standalone.yml down",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "ui": "npm run dev --workspace @quietbooks/ui",
