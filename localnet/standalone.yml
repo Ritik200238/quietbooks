@@ -30,7 +30,7 @@ services:
 
   node:
     container_name: 'quietbooks-node'
-    image: 'midnightntwrk/midnight-node:1.0.0'
+    image: 'midnightntwrk/midnight-node:1.0.1'
     ports:
       - '0.0.0.0:9944:9944'
     environment:
