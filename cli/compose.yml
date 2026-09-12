@@ -1,0 +1,66 @@
+# The local network the `standalone` launcher brings up.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# The file name, the three service names and their ports are not a choice:
+# `@midnight-ntwrk/testkit-js` looks for `compose.yml` in the working directory
+# and asks it for containers called `proof-server`, `node` and `indexer` on
+# 6300, 9944 and 8088. The shape is taken from `bboard-cli/compose.yml` in
+# midnightntwrk/example-bboard (Copyright (C) Midnight Foundation, Apache-2.0).
+#
+# The image versions are this repository's, not the example's: they match
+# `localnet/standalone.yml`, which pins the set that speaks to artifacts built by
+# the Compact toolchain this contract was compiled with. Two compose files in one
+# repository disagreeing about node versions is a debugging session nobody needs,
+# so if those pins move, move them here too.
+#
+# Host ports are left ephemeral. testcontainers picks a free one per container
+# and the testkit reads it back, which is what lets this run alongside
+# `localnet/standalone.yml` or a second CLI without a port collision.
+
+services:
+  proof-server:
+    container_name: 'proof-server_$TESTCONTAINERS_UID'
+    image: 'midnightntwrk/proof-server:8.1.0'
+    command: ['midnight-proof-server', '-v']
+    ports:
+      - '6300'
+    environment:
+      RUST_BACKTRACE: 'full'
+
+  node:
+    container_name: 'node_$TESTCONTAINERS_UID'
+    image: 'midnightntwrk/midnight-node:1.0.0'
+    ports:
+      - '9944'
+    environment:
+      CFG_PRESET: 'dev'
+      SIDECHAIN_BLOCK_BENEFICIARY: '04bcf7ad3be7a5c790460be82a713af570f22e0f801f6659ab8e84a52be6969e'
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9944/health']
+      interval: 2s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  indexer:
+    container_name: 'indexer_$TESTCONTAINERS_UID'
+    image: 'midnightntwrk/indexer-standalone:4.3.3'
+    ports:
+      - '8088'
+    environment:
+      RUST_LOG: 'indexer=info,chain_indexer=info,indexer_api=info,wallet_indexer=info,indexer_common=info,fastrace_opentelemetry=off,info'
+      APP__INFRA__NODE__URL: 'ws://node:9944'
+      APP__INFRA__SPO_NODE__URL: 'ws://node:9944'
+      APP__INFRA__SPO_NODE__BLOCKFROST_ID: 'local-dev-dummy-id'
+      APP__APPLICATION__NETWORK_ID: 'undeployed'
+      APP__INFRA__STORAGE__PASSWORD: 'indexer'
+      APP__INFRA__PUB_SUB__PASSWORD: 'indexer'
+      APP__INFRA__LEDGER_STATE_STORAGE__PASSWORD: 'indexer'
+      # A fixed development secret, required by the config schema. This network
+      # is local-only and holds nothing of value; it is written here rather than
+      # generated so a rebuilt stack can read what the previous one wrote.
+      APP__INFRA__SECRET: '303132333435363738393031323334353637383930313233343536373839303132'
+    depends_on:
+      node:
+        condition: service_healthy

@@ -1,0 +1,23 @@
+# The proof server the remote launchers bring up.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# `@midnight-ntwrk/testkit-js` looks for this exact file name in the working
+# directory when the environment is a remote network, and expects one service
+# called `proof-server` on 6300. Taken from `bboard-cli/proof-server.yml` in
+# midnightntwrk/example-bboard (Copyright (C) Midnight Foundation, Apache-2.0),
+# with the image version aligned to `localnet/standalone.yml`.
+#
+# The prover runs here, on the operator's own machine, rather than as a hosted
+# service. Proving needs the invoice openings, and those are the one thing this
+# product exists to keep off somebody else's hardware.
+
+services:
+  proof-server:
+    container_name: 'proof-server_$TESTCONTAINERS_UID'
+    image: 'midnightntwrk/proof-server:8.1.0'
+    command: ['midnight-proof-server', '-v']
+    ports:
+      - '0:6300'
+    environment:
+      RUST_BACKTRACE: 'full'
