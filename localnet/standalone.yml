@@ -1,0 +1,72 @@
+# A self-contained Midnight network for development and end-to-end tests.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Adapted from midnightntwrk/midnight-local-dev (Apache-2.0), `standalone.yml`.
+# Kept in this repository rather than referenced so that the versions the tests
+# run against are pinned next to the code that depends on them, and so a judge
+# can bring the whole thing up without cloning anything else.
+#
+# Versions are the set midnight-local-dev ships together. They are deliberately
+# NOT tracked to "latest": the Compact toolchain is pinned to 0.31.1 (language
+# 0.23), and a newer node or indexer is not guaranteed to speak to artifacts
+# built by that compiler.
+
+services:
+  proof-server:
+    container_name: 'quietbooks-proof-server'
+    image: 'midnightntwrk/proof-server:8.1.0'
+    command: ['midnight-proof-server', '-v']
+    ports:
+      - '0.0.0.0:6300:6300'
+    environment:
+      RUST_BACKTRACE: 'full'
+    healthcheck:
+      test: ['CMD-SHELL', 'echo > /dev/tcp/127.0.0.1/6300']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  node:
+    container_name: 'quietbooks-node'
+    image: 'midnightntwrk/midnight-node:1.0.0'
+    ports:
+      - '0.0.0.0:9944:9944'
+    environment:
+      CFG_PRESET: 'dev'
+      SIDECHAIN_BLOCK_BENEFICIARY: '04bcf7ad3be7a5c790460be82a713af570f22e0f801f6659ab8e84a52be6969e'
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9944/health']
+      interval: 2s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  indexer:
+    container_name: 'quietbooks-indexer'
+    image: 'midnightntwrk/indexer-standalone:4.3.3'
+    ports:
+      - '0.0.0.0:8088:8088'
+    environment:
+      RUST_LOG: 'indexer=info,chain_indexer=info,indexer_api=info,wallet_indexer=info,indexer_common=info,fastrace_opentelemetry=off,info'
+      APP__INFRA__NODE__URL: 'ws://node:9944'
+      APP__APPLICATION__NETWORK_ID: 'undeployed'
+      APP__INFRA__STORAGE__PASSWORD: 'indexer'
+      APP__INFRA__PUB_SUB__PASSWORD: 'indexer'
+      APP__INFRA__LEDGER_STATE_STORAGE__PASSWORD: 'indexer'
+      # A fixed development secret. This network is local-only and holds no real
+      # value; it is written here rather than generated so that a rebuilt stack
+      # can read the state the previous one wrote.
+      APP__INFRA__SECRET: '303132333435363738393031323334353637383930313233343536373839303132'
+      APP__INFRA__SPO_NODE__URL: 'ws://node:9944'
+      APP__INFRA__SPO_NODE__BLOCKFROST_ID: 'e2e-test-dummy-id'
+    healthcheck:
+      test: ['CMD-SHELL', 'cat /var/run/indexer-standalone/running']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    depends_on:
+      node:
+        condition: service_healthy
