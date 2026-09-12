@@ -1,0 +1,43 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "types": ["node", "vite/client"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": false,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "useDefineForClassFields": true,
+    "sourceMap": true,
+    "noEmit": true,
+
+    "baseUrl": ".",
+    // `@quietbooks/contract` is a workspace dependency and is declared as one in
+    // package.json. This mapping exists because that package's published entry
+    // points do not currently work: "types"/"main" name ./dist/index.*, its own
+    // tsconfig.build.json emits ./dist/src/index.*, and the emitted file then
+    // re-exports "../build/contract/index.js", which from dist/src resolves to a
+    // path that was never emitted. Pointing at the source is the one place the
+    // package is self-consistent. Delete this entry once dist resolves.
+    // `@quietbooks/api` resolves perfectly well through the workspace symlink.
+    // It is named here only so that it, and everything it imports, is reached by
+    // the same spelling of this directory as the rest of the program: the
+    // symlink npm wrote records a different letter case for the same path, and
+    // on a case-insensitive filesystem that makes one file look like two.
+    "paths": {
+      "@quietbooks/contract": ["../contract/src/index.ts"],
+      "@quietbooks/api": ["../api/dist/index.d.ts"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}

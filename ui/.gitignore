@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.vite/
+
+# Local endpoint configuration. `.env.example` is the documented one.
+.env
+.env.local
+.env.*.local
