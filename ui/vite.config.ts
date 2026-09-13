@@ -122,6 +122,10 @@ export default defineConfig({
   },
   plugins: [react(), wasm(), topLevelAwait(), zkArtifacts()],
   resolve: {
+    // One instance of anything that keeps module-level state. The network id
+    // lives in a module variable and is set once at start-up; two copies mean
+    // the copy that gets read is not the copy that was set.
+    dedupe: ['@midnight-ntwrk/midnight-js-network-id'],
     alias: {
       'node:crypto': resolve(here, 'src/shims/node-crypto.ts'),
       'node:buffer': resolve(here, 'src/shims/node-buffer.ts'),
