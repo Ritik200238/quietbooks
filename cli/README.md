@@ -135,11 +135,11 @@ itself uses, and the menu reappears. `--verbose` turns the stack back on.
 
 | Path | Who calls it | What the chain learns | Status |
 | --- | --- | --- | --- |
-| Shielded note (menu 6) | Buyer | That the invoice settled, and a 32-byte commitment. Not the amount, not the recipient. | **Known not to work from this CLI alone.** The circuit calls `kernel.claimZswapCoinReceive`, so the ledger accepts the call only when that note commitment is an output of the same transaction. This CLI submits the contract call on its own and does not build the payment output, so the ledger refuses it unless your wallet put the output there. The CLI says so at the prompt rather than letting you find out after a proof. |
+| Shielded note (menu 6) | Buyer | That the invoice settled, and a 32-byte commitment. Not the amount, not the recipient. | Implemented, and it now builds the payment itself. The circuit receives the buyer's coin and forwards it to the seller in the same call, so the payment and the record are one transaction and the contract never holds the money. It also refuses any coin that is not the exact invoiced total. You need the seller's coin public key, which is not the party key on the invoice. |
 | Attested (menu 7) | Seller | That the invoice settled, and a receipt digest. | Implemented; the circuit needs nothing but the call. Weaker by design: the chain records the seller's statement, not the payment. The seller is the party who loses by lying, which is why only they can call it. |
 | Escrow (menu 9) | Buyer funds, buyer releases | **The amount, in the clear**, plus the token and the deadline. | Implemented. The contract takes custody through `receiveShielded`, which relies on the transaction carrying an output to the contract for the coin passed in; that part is the midnight-js balancer's job rather than this CLI's. Pick escrow only when a locked balance is worth more than a hidden one. |
 
-Neither of the last two has been exercised against a live chain from this machine — see **Verification status**.
+For what has actually been run against a live chain, see **Verification status**.
 
 ---
 
@@ -270,32 +270,37 @@ the anchor still proves the disclosed values belong to this invoice and no other
 
 What has actually been run, so nothing here is taken on trust:
 
-* **Checked.** `npx tsc --noEmit` in this directory, with the workspace packages
-  resolved from source. Startup through to the container launch, on a machine
-  with no Docker: the header renders, the failure is reported as one line, and
-  the session shuts down cleanly. `--verbose` restores the stack. `--identity`
-  rejects an unusable label with a single line. The interactive layer driven
-  against a stub API: the invoice table with openable, opaque and settled rows;
-  the detail view in all three states; the whole issue flow including the
-  running subtotal, the tax ceiling and the confirmation; and every prompt's
-  rejection path (empty, non-numeric, negative, short hex, non-hex, odd-length
-  hex, out-of-range day counts).
-* **Not checked.** Anything that needs a chain. No container runtime was
-  available on the machine this was written on, so no deployment, no proof, no
-  transaction and no settlement has been run end to end. The walkthrough above
-  describes what the code does, not a session someone watched.
-* **Known broken upstream.** `@quietbooks/api` calls `deployContract` and
-  `findDeployedContract` with a `contract:` property; `@midnight-ntwrk/midnight-js-contracts`
-  4.1.1 names it `compiledContract:`. Until that is fixed in the api package,
-  deploying and joining will fail, and with them everything downstream. The
-  typecheck reports it as the only two errors it finds, both in `../api/src/index.ts`.
+* **Checked, without a chain.** `npx tsc --noEmit` in this directory, with the
+  workspace packages resolved from source. Startup through to the container
+  launch on a machine with no Docker: the header renders, the failure is reported
+  as one line, and the session shuts down cleanly. `--verbose` restores the
+  stack. `--identity` rejects an unusable label with a single line. The
+  interactive layer driven against a stub API: the invoice table with openable,
+  opaque and settled rows; the detail view in all three states; the whole issue
+  flow including the running subtotal, the tax ceiling and the confirmation; and
+  every prompt's rejection path (empty, non-numeric, negative, short hex,
+  non-hex, odd-length hex, out-of-range day counts).
+* **Checked against a real chain, but through the end-to-end harness rather than
+  this CLI.** `e2e/` drives the same `@quietbooks/api` against a live node,
+  indexer and proof server: deploy, issue, private settlement with a real
+  shielded payment, escrow funding and release, audit grant and revocation. Those
+  are the same API methods the menus call. What has *not* been watched is a human
+  driving these menus against a live chain end to end.
+* **Fixed since this document first said otherwise.** An earlier version recorded
+  that `@quietbooks/api` passed `contract:` where midnight-js 4.1.1 wants
+  `compiledContract:`, and that nothing had ever reached a chain. Both are no
+  longer true.
 
 ## What this CLI does not do
 
 Stated plainly, because a judge should not have to find these out by hitting
 them.
 
-* **It does not build the shielded payment for menu 6.** See the settlement table.
+* **It does not know the seller's coin public key for menu 6.** The payment itself
+  is built by the contract call now, but a payout key has to come from the person
+  being paid; the invoice carries a party key, which is a hash and cannot receive
+  money. Blank pays this wallet, which is useful for a single-wallet demo and
+  nothing else.
 * **It does not build or validate audit envelopes.** Menu 11 publishes the grant
   and prints the key, which is the on-chain half. The envelope that carries the
   disclosed fields, and the validator that checks it against the anchor, live in
