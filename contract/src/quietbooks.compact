@@ -17,21 +17,31 @@
 //
 //   * `receiveShielded` requires its coin argument to be disclosed (see the
 //     official token-transfers example, which writes `receiveShielded(disclose(coin))`).
-//     A coin's `value` field is therefore public the moment a contract takes
-//     custody of it. Contract custody and hidden amounts are mutually exclusive
-//     on Midnight today.
-//   * There is no standard-library circuit that derives a Zswap note commitment
-//     from coin data, so a contract cannot re-derive a commitment in-circuit and
-//     bind it to a private amount.
-//   * `claimZswapCoinReceive(note)` does bind a transaction to a Zswap output
-//     using only the 32-byte note commitment. The commitment reveals nothing
-//     about value or recipient.
+//     A coin's `value` field is therefore visible to the circuit, and a contract
+//     that HOLDS a coin publishes the held value in its balance. Contract
+//     custody and a hidden amount are mutually exclusive on Midnight today.
+//   * A contract can still route a payment without holding it. `receiveShielded`
+//     followed by `sendImmediateShielded` in the same call takes the coin and
+//     passes it straight on, so the contract's balance changes by zero and
+//     nothing is ever in its custody. Zswap hides the value on both legs. This
+//     is the shape OpenZeppelin's `ForwarderShielded._deposit` uses.
 //
-// So the private mode settles peer to peer .. a normal shielded wallet transfer,
-// where Zswap hides the amount .. and the contract atomically binds that transfer
-// to the invoice through its note commitment. The chain learns that invoice X was
-// settled by a real shielded output; it never learns for how much. An auditor
-// holding the opening can verify the amount exactly.
+// So the private mode settles buyer -> contract -> seller inside one transaction.
+// The chain learns that invoice X was settled and when; it never learns for how
+// much. The circuit additionally proves the payment equals the invoiced total,
+// by comparing the coin against the terms the payer has just proven they hold,
+// so neither figure reaches public state and a buyer cannot settle by underpaying.
+//
+// A previous version of this contract tried to bind an ordinary buyer-to-seller
+// transfer with `kernel.claimZswapCoinReceive(note)`, taking the note commitment
+// as an argument. That cannot work, and it is worth stating plainly because the
+// in-process tests could not show it: the ledger requires every
+// contract-associated commitment to be claimed by the contract that owns it, so
+// a receive claim only ever accepts the commitment of an output addressed to
+// THIS contract. A payment addressed to the seller is not, so every such
+// transaction was refused as malformed. Circuit tests that never build a
+// transaction cannot catch this; the end-to-end run against a real node is what
+// does.
 //
 // The escrow mode is offered as the honest alternative for parties who want funds
 // actually locked by the contract. It takes custody, and it therefore makes the
@@ -66,6 +76,7 @@ export circuit tagTerms(): Bytes<32> { return pad(32, "quietbooks:terms:v1"); }
 export circuit tagFieldRoot(): Bytes<32> { return pad(32, "quietbooks:field-root:v1"); }
 export circuit tagSettlement(): Bytes<32> { return pad(32, "quietbooks:settlement:v1"); }
 export circuit tagEscrowCoin(): Bytes<32> { return pad(32, "quietbooks:escrow-coin:v1"); }
+export circuit tagPaidCoin(): Bytes<32> { return pad(32, "quietbooks:paid-coin:v1"); }
 export circuit tagReliability(): Bytes<32> { return pad(32, "quietbooks:reliability:v1"); }
 
 // Per-field tags. The ordering is fixed and mirrors the scope bit positions in
@@ -423,6 +434,23 @@ export circuit commitSettlementReceipt(
 // Binds an escrowed coin so that whoever releases it must present the same coin.
 // The digest hides the value; the vault entry does not, which is the documented
 // cost of escrow mode.
+// The digest recorded against a privately settled invoice.
+//
+// The nonce is 32 bytes the buyer drew at random for this one coin and never
+// publishes, so it blinds the value: an auditor handed the coin can recompute
+// this digest and confirm exactly what was paid, and nobody else can invert it
+// even though invoice amounts are low-entropy. Same construction as
+// `commitEscrowCoin`, under its own tag so an escrow digest can never be
+// replayed as a payment digest.
+export circuit commitPaidCoin(coin: ShieldedCoinInfo): Bytes<32> {
+  return persistentHash<Vector<4, Bytes<32>>>([
+    tagPaidCoin(),
+    coin.nonce,
+    coin.color,
+    coin.value as Field as Bytes<32>
+  ]);
+}
+
 export circuit commitEscrowCoin(coin: QualifiedShieldedCoinInfo): Bytes<32> {
   return persistentHash<Vector<4, Bytes<32>>>([
     tagEscrowCoin(),
@@ -588,30 +616,36 @@ circuit assertHoldsTerms(invoiceId: Bytes<32>, anchor: InvoiceAnchor): [] {
          "quietbooks: terms do not open the recorded commitment");
 }
 
-// Settle by binding a shielded transfer made in this same transaction.
+// Settle privately: the buyer pays the seller inside the same transaction that
+// records the settlement, and the contract never holds the money.
 //
-// The buyer's wallet creates a shielded output to the seller for the invoice
-// amount. Zswap hides that amount. The buyer passes the output's note commitment
-// here; `claimZswapCoinReceive` refuses the transaction unless that commitment is
-// genuinely present, and refuses to let two calls claim the same one.
+// `receiveShielded` requires the coin to exist as an output addressed to this
+// contract; `sendImmediateShielded` forwards it to the seller in the same call.
+// The contract's balance therefore changes by zero and nothing is ever in its
+// custody. Zswap hides the value on both legs, so what reaches public state is
+// two commitments, a status and a date.
 //
-// What an observer learns: that invoice X was settled, and a 32-byte commitment.
-// Not the amount, not the recipient. An auditor given the coin's opening can
-// verify both.
+// An earlier version of this circuit took a bare note commitment and handed it
+// to `kernel.claimZswapCoinReceive`. That shape cannot work, and the in-process
+// tests could not show it: the ledger requires every contract-associated
+// commitment to be claimed by the contract that owns it, so a receive claim
+// only ever accepts the commitment of an output addressed to THIS contract. A
+// buyer-to-seller payment is addressed to the seller, so the claim was
+// unsatisfiable and the node refused every such transaction as malformed. The
+// forwarder shape below is what the platform supports, and it is the shape
+// OpenZeppelin's `ForwarderShielded._deposit` uses.
 export circuit settleWithNote(
   invoiceId: Bytes<32>,
   buyerPin: Uint<64>,
-  note: Bytes<32>,
+  coin: ShieldedCoinInfo,
+  sellerPayout: ZswapCoinPublicKey,
   settledAt: Uint<64>
 ): [] {
   assertNotPaused();
   const id = disclose(invoiceId);
   const at = disclose(settledAt);
-  const n = disclose(note);
 
-  assert(n != default<Bytes<32>>, "quietbooks: note commitment must be non-zero");
   assert(invoices.member(id), "quietbooks: unknown invoice");
-
   const anchor = invoices.lookup(id);
   assert(anchor.status == InvoiceStatus.issued, "quietbooks: invoice is not open for settlement");
 
@@ -620,11 +654,23 @@ export circuit settleWithNote(
 
   assertHoldsTerms(id, anchor);
 
-  // Bind the transfer. Without this the status change would be a bare assertion
-  // by the payer; with it, the ledger itself refuses the claim unless a real
-  // shielded output exists in the containing transaction.
-  kernel.claimZswapCoinReceive(n);
+  // The payment has to be the invoiced total, and the contract checks that
+  // without either figure reaching public state. The terms are the ones just
+  // proven to open the commitment the chain has held since issuance, and the
+  // comparison happens inside the circuit against the coin the buyer is
+  // spending. A buyer cannot mark an invoice settled by underpaying it.
+  const terms = invoiceTerms();
+  assert(coin.value == terms.amount + terms.taxAmount,
+         "quietbooks: payment does not equal the invoice total");
 
+  receiveShielded(disclose(coin));
+  sendImmediateShielded(
+    disclose(coin),
+    left<ZswapCoinPublicKey, ContractAddress>(disclose(sellerPayout)),
+    disclose(coin.value)
+  );
+
+  const n = disclose(commitPaidCoin(coin));
   const onTime = at <= anchor.dueDate;
 
   settlements.insert(id, Settlement {

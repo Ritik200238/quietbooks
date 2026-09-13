@@ -10,6 +10,7 @@ import {
   bytes32,
   BUYER_PIN,
   BUYER_SECRET,
+  coin,
   ctx,
   DAY,
   deploy,
@@ -17,6 +18,7 @@ import {
   expectThrows,
   issue,
   led,
+  pk,
   SELLER_PIN,
   SELLER_SECRET,
   share,
@@ -25,11 +27,12 @@ import {
   T0,
 } from './harness.js';
 
-import { InvoiceStatus, SettlementMode } from '../build/contract/index.js';
-import { prepareInvoice } from '../src/invoice.js';
+import { InvoiceStatus, pureCircuits, SettlementMode } from '../build/contract/index.js';
+import { payableTotal, prepareInvoice } from '../src/invoice.js';
 import { randomBytes32, toHex } from '../src/util.js';
 
-const NOTE = bytes32(0x9e);
+/** Where the buyer sends the payment. The contract only forwards to it. */
+const SELLER_PAYOUT = pk(0x77);
 
 describe('issuing an invoice', () => {
   it('writes an anchor holding no commercial value at all', async () => {
@@ -171,37 +174,46 @@ describe('issuing an invoice', () => {
 });
 
 describe('settling with a bound shielded transfer', () => {
-  const settle = async (options: { at?: bigint; note?: Uint8Array } = {}) => {
+  /**
+   * Issue an invoice and pay it with a coin worth exactly what it asks for.
+   *
+   * The coin is handed back with the result because the recorded note is a
+   * commitment to it: a test that wants to check the note has to know which coin
+   * was spent.
+   */
+  const settle = async (options: { at?: bigint; draft?: Parameters<typeof draft>[0] } = {}) => {
     const d0 = deploy();
     const seller = actor(d0, SELLER_SECRET, SELLER_PIN);
     const buyer = actor(d0, BUYER_SECRET, BUYER_PIN);
-    const issued = await issue(d0, seller, buyer);
+    const issued = await issue(d0, seller, buyer, { draft: options.draft });
 
     // The buyer can only settle an invoice whose terms they can open, so the
     // seller must share the record out of band first. That is a real step in the
     // product, not a test artefact.
     const buyerState = stageFor(share(buyer.state, issued.stored), issued.prepared);
     const at = options.at ?? T0 + DAY;
+    const payment = coin(payableTotal(issued.prepared.terms));
 
     const result = issued.d.contract.impureCircuits.settleWithNote(
       ctx(issued.d, buyerState, at),
       issued.invoiceId,
       buyer.pin,
-      options.note ?? NOTE,
+      payment,
+      SELLER_PAYOUT,
       at,
     );
-    return { ...issued, seller, buyer, d: advance(issued.d, result), at };
+    return { ...issued, seller, buyer, d: advance(issued.d, result), at, payment };
   };
 
   it('marks the invoice settled and records only a digest', async () => {
-    const { d, invoiceId, at } = await settle();
+    const { d, invoiceId, at, payment } = await settle();
     const anchor = led(d).invoices.lookup(invoiceId);
     expect(anchor.status).toBe(InvoiceStatus.settled);
     expect(anchor.settledAt).toBe(at);
 
     const settlement = led(d).settlements.lookup(invoiceId);
     expect(settlement.mode).toBe(SettlementMode.privateNote);
-    expect(toHex(settlement.note)).toBe(toHex(NOTE));
+    expect(toHex(settlement.note)).toBe(toHex(pureCircuits.commitPaidCoin(payment)));
     expect(settlement.onTime).toBe(true);
     expect(led(d).settledCount).toBe(1n);
   });
@@ -236,31 +248,71 @@ describe('settling with a bound shielded transfer', () => {
           ctx(d, buyerState),
           invoiceId,
           buyer.pin,
-          NOTE,
+          coin(payableTotal(prepared.terms)),
+          SELLER_PAYOUT,
           T0 + 2n * DAY,
         ),
       'not open for settlement',
     );
   });
 
-  it('refuses a zero note, which would bind nothing', async () => {
+  /** An attempt to pay `delta` away from what the invoice asks for. */
+  const settleOffBy = async (delta: bigint) => {
     const d0 = deploy();
     const seller = actor(d0, SELLER_SECRET, SELLER_PIN);
     const buyer = actor(d0, BUYER_SECRET, BUYER_PIN);
     const issued = await issue(d0, seller, buyer);
     const buyerState = stageFor(share(buyer.state, issued.stored), issued.prepared);
 
-    expectThrows(
-      () =>
-        issued.d.contract.impureCircuits.settleWithNote(
-          ctx(issued.d, buyerState),
-          issued.invoiceId,
-          buyer.pin,
-          new Uint8Array(32),
-          T0 + DAY,
-        ),
-      'note commitment must be non-zero',
-    );
+    return () =>
+      issued.d.contract.impureCircuits.settleWithNote(
+        ctx(issued.d, buyerState, T0 + DAY),
+        issued.invoiceId,
+        buyer.pin,
+        coin(payableTotal(issued.prepared.terms) + delta),
+        SELLER_PAYOUT,
+        T0 + DAY,
+      );
+  };
+
+  // Neither the invoiced total nor the coin's value reaches public state, so the
+  // only place this can be enforced is inside the circuit, against the terms the
+  // buyer has just proven open the commitment recorded at issuance.
+  it('refuses a payment short of the invoiced total', async () => {
+    expectThrows(await settleOffBy(-1n), 'payment does not equal the invoice total');
+  });
+
+  it('refuses a payment over the invoiced total', async () => {
+    expectThrows(await settleOffBy(1n), 'payment does not equal the invoice total');
+  });
+
+  it('records a digest of the coin that was actually paid', async () => {
+    const a = await settle();
+    const b = await settle({ draft: { taxAmount: 125_000n } });
+    expect(b.payment.value).not.toBe(a.payment.value);
+
+    const first = led(a.d).settlements.lookup(a.invoiceId);
+    const second = led(b.d).settlements.lookup(b.invoiceId);
+
+    expect(toHex(first.note)).toBe(toHex(pureCircuits.commitPaidCoin(a.payment)));
+    expect(toHex(second.note)).toBe(toHex(pureCircuits.commitPaidCoin(b.payment)));
+    expect(toHex(first.note)).not.toBe(toHex(second.note));
+  });
+
+  it('keeps the paid amount out of the digest', async () => {
+    const a = await settle();
+    const b = await settle();
+    expect(b.payment.value).toBe(a.payment.value);
+
+    const first = led(a.d).settlements.lookup(a.invoiceId);
+    const second = led(b.d).settlements.lookup(b.invoiceId);
+    expect(toHex(first.note)).not.toContain(a.payment.value.toString());
+
+    // Absent digits prove little on their own: invoice totals are low entropy, so
+    // a digest over the value alone would be worth brute-forcing. What defeats
+    // that is the nonce the buyer draws per coin .. the same amount paid twice
+    // lands as two unrelated digests, and nobody can tell they match.
+    expect(toHex(first.note)).not.toBe(toHex(second.note));
   });
 
   it('refuses anyone who is not the named buyer', async () => {
@@ -277,7 +329,8 @@ describe('settling with a bound shielded transfer', () => {
           ctx(issued.d, strangerState),
           issued.invoiceId,
           stranger.pin,
-          NOTE,
+          coin(payableTotal(issued.prepared.terms)),
+          SELLER_PAYOUT,
           T0 + DAY,
         ),
       'caller is not the buyer',
@@ -297,7 +350,8 @@ describe('settling with a bound shielded transfer', () => {
           ctx(issued.d, buyerState),
           issued.invoiceId,
           buyer.pin + 1n,
-          NOTE,
+          coin(payableTotal(issued.prepared.terms)),
+          SELLER_PAYOUT,
           T0 + DAY,
         ),
       'caller is not the buyer',
@@ -325,7 +379,8 @@ describe('settling with a bound shielded transfer', () => {
           ctx(issued.d, buyerState),
           issued.invoiceId,
           buyer.pin,
-          NOTE,
+          coin(payableTotal(tampered.terms)),
+          SELLER_PAYOUT,
           T0 + DAY,
         ),
       'terms do not open the recorded commitment',
@@ -345,7 +400,8 @@ describe('settling with a bound shielded transfer', () => {
           ctx(issued.d, buyerState),
           bytes32(0xee),
           buyer.pin,
-          NOTE,
+          coin(payableTotal(issued.prepared.terms)),
+          SELLER_PAYOUT,
           T0 + DAY,
         ),
       'unknown invoice',
@@ -453,7 +509,8 @@ describe('cancelling', () => {
         ctx(issued.d, buyerState),
         issued.invoiceId,
         buyer.pin,
-        NOTE,
+        coin(payableTotal(issued.prepared.terms)),
+        SELLER_PAYOUT,
         T0 + DAY,
       ),
     );
@@ -491,7 +548,8 @@ describe('cancelling', () => {
           ctx(cancelled, buyerState),
           issued.invoiceId,
           buyer.pin,
-          NOTE,
+          coin(payableTotal(issued.prepared.terms)),
+          SELLER_PAYOUT,
           T0 + DAY,
         ),
       'not open for settlement',
