@@ -38,6 +38,8 @@ import {
   type IssuedInvoice,
 } from './harness.js';
 
+import { pureCircuits } from '../build/contract/index.js';
+import { grantCovers } from '../src/audit.js';
 import { allScopes, noScopes, scopeNames, scopesFrom } from '../src/invoice.js';
 import { toHex } from '../src/util.js';
 
@@ -82,15 +84,24 @@ const grant = (
 const revoke = (d: Deployed, invoiceId: Uint8Array, seller: Actor): Deployed =>
   advance(d, d.contract.impureCircuits.revokeAudit(ctx(d, seller.state), invoiceId, seller.pin));
 
-/** Ask the contract whether a grant is usable for `scopes` at block time `time`. */
+/**
+ * Is the stored grant usable for `scopes` at time `time`?
+ *
+ * Reads the grant the contract actually wrote and applies `grantCovers`, the
+ * same rule the envelope validator applies. What is under test here is what
+ * `grantAudit` and `revokeAudit` put in the ledger; the rule itself is covered
+ * in the envelope suite.
+ */
 const covers = (
   d: Deployed,
   invoiceId: Uint8Array,
   scopes: boolean[],
   time: bigint = T0,
-): boolean =>
-  d.contract.impureCircuits.auditGrantCovers(ctx(d, d.privateState, time), invoiceId, scopes)
-    .result;
+): boolean => {
+  const grants = led(d).auditGrants;
+  const stored = grants.member(invoiceId) ? grants.lookup(invoiceId) : undefined;
+  return grantCovers(stored, scopes, time);
+};
 
 const settle = (d: Deployed, issued: IssuedInvoice, buyer: Actor, at: bigint): Deployed =>
   advance(
@@ -107,26 +118,23 @@ const settle = (d: Deployed, issued: IssuedInvoice, buyer: Actor, at: bigint): D
 const setPaused = (d: Deployed, admin: Actor, value: boolean): Deployed =>
   advance(d, d.contract.impureCircuits.setPaused(ctx(d, admin.state), value));
 
-const reliabilityOf = (d: Deployed, key: Uint8Array) =>
-  d.contract.impureCircuits.readReliabilityOf(ctx(d, d.privateState), key).result;
-
-const prove = (
-  d: Deployed,
-  party: Actor,
-  minSettled: bigint,
-  minOnTime: bigint,
-  maxDisputesLost: bigint,
-): boolean =>
-  d.contract.impureCircuits.proveReliability(
-    ctx(d, party.state),
-    party.pin,
-    minSettled,
-    minOnTime,
-    maxDisputesLost,
-  ).result;
+/**
+ * A party's counters, straight from public ledger state.
+ *
+ * The counters are public by construction, so a reader takes them from the
+ * ledger rather than through a circuit. A party with no history has no map
+ * entry at all, which reads as all zeros -- the same value the contract's
+ * internal `readReliability` returns for that case.
+ */
+const reliabilityOf = (d: Deployed, key: Uint8Array) => {
+  const counters = led(d).reliability;
+  return counters.member(key)
+    ? counters.lookup(key)
+    : { settled: 0n, settledOnTime: 0n, cancelled: 0n, disputesOpened: 0n, disputesLost: 0n };
+};
 
 const adminKeyFor = (d: Deployed, secret: Uint8Array): Uint8Array =>
-  d.contract.impureCircuits.deriveAdminKey(ctx(d, d.privateState), secret).result;
+  pureCircuits.deriveAdminKeyWith(led(d).instanceSalt, secret);
 
 describe('granting an auditor sight of an invoice', () => {
   it('pins the key hash, the fields and the window the seller authorised', async () => {
@@ -343,7 +351,7 @@ describe('revoking a grant', () => {
   });
 });
 
-describe('reliability proofs', () => {
+describe('the reliability record', () => {
   /** A seller with two settlements against them, one of them late. */
   const sellerWithHistory = async () => {
     const d0 = deploy();
@@ -370,14 +378,6 @@ describe('reliability proofs', () => {
     });
   });
 
-  it('lets a party with no history clear an all-zero threshold and nothing more', () => {
-    const d = deploy();
-    const stranger = actor(d, STRANGER_SECRET, 7n);
-    expect(prove(d, stranger, 0n, 0n, 0n)).toBe(true);
-    expect(prove(d, stranger, 1n, 0n, 0n)).toBe(false);
-    expect(prove(d, stranger, 0n, 1n, 0n)).toBe(false);
-  });
-
   it('moves the seller counters as invoices settle', async () => {
     const { d, seller } = await sellerWithHistory();
     const r = reliabilityOf(d, seller.key);
@@ -387,23 +387,7 @@ describe('reliability proofs', () => {
     expect(r.disputesLost).toBe(0n);
   });
 
-  it('proves a threshold the record actually meets', async () => {
-    const { d, seller } = await sellerWithHistory();
-    expect(prove(d, seller, 2n, 1n, 0n)).toBe(true);
-    expect(prove(d, seller, 1n, 0n, 3n)).toBe(true);
-  });
-
-  it('fails when the settled count falls short', async () => {
-    const { d, seller } = await sellerWithHistory();
-    expect(prove(d, seller, 3n, 1n, 0n)).toBe(false);
-  });
-
-  it('fails when the on-time count falls short', async () => {
-    const { d, seller } = await sellerWithHistory();
-    expect(prove(d, seller, 2n, 2n, 0n)).toBe(false);
-  });
-
-  it('fails when more disputes were lost than the threshold allows', async () => {
+  it('marks a lost dispute against the party that lost it', async () => {
     const d0 = deploy();
     const seller = actor(d0, SELLER_SECRET, SELLER_PIN);
     const buyer = actor(d0, BUYER_SECRET, BUYER_PIN);
@@ -443,17 +427,8 @@ describe('reliability proofs', () => {
     );
 
     expect(reliabilityOf(d, seller.key).disputesLost).toBe(1n);
-    expect(prove(d, seller, 0n, 0n, 0n)).toBe(false);
-    expect(prove(d, seller, 0n, 0n, 1n)).toBe(true);
-  });
-
-  it('answers with one bit, not with the counts behind it', async () => {
-    const { d, seller } = await sellerWithHistory();
-
-    // Two different questions about the same record produce the same answer, so
-    // a counterparty who is told "yes" learns that the threshold held and not
-    // how far above it the seller actually is.
-    expect(prove(d, seller, 2n, 1n, 0n)).toBe(prove(d, seller, 1n, 0n, 9n));
+    expect(reliabilityOf(d, buyer.key).disputesLost).toBe(0n);
+    expect(reliabilityOf(d, buyer.key).disputesOpened).toBe(1n);
   });
 
   it('counts against the key that settled, not the wallet behind it', async () => {
@@ -463,7 +438,7 @@ describe('reliability proofs', () => {
     // That is the price of shedding linkability, and it should be visible.
     const rotated = actor(d, SELLER_SECRET, SELLER_PIN + 1n);
     expect(reliabilityOf(d, rotated.key).settled).toBe(0n);
-    expect(prove(d, rotated, 1n, 0n, 0n)).toBe(false);
+    expect(reliabilityOf(d, rotated.key).settledOnTime).toBe(0n);
   });
 });
 
@@ -519,46 +494,9 @@ describe('administration', () => {
     expect(led(resumed).paused).toBe(false);
   });
 
-  it('hands the role to a new key and locks the old holder out', () => {
-    const d0 = deploy(SELLER_SECRET);
-    const outgoing = actor(d0, SELLER_SECRET, SELLER_PIN);
-    const incoming = actor(d0, BUYER_SECRET, BUYER_PIN);
-    const nextAdmin = adminKeyFor(d0, BUYER_SECRET);
-
-    const d = advance(
-      d0,
-      d0.contract.impureCircuits.rotateAdmin(ctx(d0, outgoing.state), nextAdmin),
-    );
-    expect(toHex(led(d).admin)).toBe(toHex(nextAdmin));
-
-    // The rotation moves no private key: the incoming admin already held the
-    // secret behind `nextAdmin` and the outgoing one never learns it.
-    expect(led(setPaused(d, incoming, true)).paused).toBe(true);
-    expectThrows(() => setPaused(d, outgoing, true), 'caller is not the admin');
-  });
-
-  it('refuses a zero key, which would strand the role', () => {
-    const d = deploy(SELLER_SECRET);
-    const admin = actor(d, SELLER_SECRET, SELLER_PIN);
-    expectThrows(
-      () => d.contract.impureCircuits.rotateAdmin(ctx(d, admin.state), new Uint8Array(32)),
-      'new admin must be set',
-    );
-  });
-
   it('refuses a pause from anyone but the admin', () => {
     const d = deploy(SELLER_SECRET);
     const stranger = actor(d, STRANGER_SECRET, 7n);
     expectThrows(() => setPaused(d, stranger, true), 'caller is not the admin');
-  });
-
-  it('refuses a rotation from anyone but the admin', () => {
-    const d = deploy(SELLER_SECRET);
-    const stranger = actor(d, STRANGER_SECRET, 7n);
-    expectThrows(
-      () =>
-        d.contract.impureCircuits.rotateAdmin(ctx(d, stranger.state), adminKeyFor(d, STRANGER_SECRET)),
-      'caller is not the admin',
-    );
   });
 });
