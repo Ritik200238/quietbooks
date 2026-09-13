@@ -37,7 +37,6 @@ import {
   SCOPE_LABELS,
   TEXT_SCOPES,
   auditKeyHash,
-  auditModuleAvailable,
   buildAuditEnvelope,
   deriveAuditKey,
   formatValidationReport,
@@ -55,6 +54,7 @@ import {
   toLocalInputValue,
   truncateHex,
 } from '../lib/format';
+import { PAUSED_REASON, blockedBy } from '../lib/guards';
 import { networkId } from '../lib/providers';
 import { routePath } from '../state/router';
 import { useConnected, useSession } from '../state/session';
@@ -78,7 +78,7 @@ const GrantAudit = ({
   readonly initialInvoiceId: string | undefined;
 }): JSX.Element => {
   const { api, contractAddress } = useConnected();
-  const { refresh } = useSession();
+  const { state, refresh } = useSession();
 
   const [chosenId, setInvoiceId] = useState(initialInvoiceId ?? invoices[0]?.invoiceId ?? '');
   const [scopes, setScopes] = useState<Record<ScopeName, boolean>>(() => {
@@ -169,6 +169,21 @@ const GrantAudit = ({
     await refresh();
     return { auditKeyHex: bytesToHex(auditKey), envelope, envelopeProblem };
   }, 'Building the proof and submitting the grant. This can take a minute.');
+
+  // `grantAudit` opens with `assertNotPaused()` and asserts the expiry is after
+  // the moment of granting, so both are refused on chain a minute after the
+  // button is pressed. The expiry is read leniently because the field is
+  // half-typed on the way to a valid value.
+  const now = nowSeconds();
+  const expiresAt = safeExpiry(expiry);
+
+  const blocked = blockedBy([
+    [state?.paused === true, PAUSED_REASON],
+    [selected?.stored === undefined, 'This wallet cannot open that invoice.'],
+    [chosen.length === 0, 'The contract refuses a grant that discloses nothing.'],
+    [expiresAt === 0n, 'Give an expiry date and time.'],
+    [expiresAt <= now, 'The grant has to expire in the future. Pick a later moment.'],
+  ]);
 
   if (invoices.length === 0) {
     return (
@@ -324,19 +339,13 @@ const GrantAudit = ({
         <button
           type="button"
           className="button button-primary"
-          disabled={grant.busy || chosen.length === 0 || selected?.stored === undefined}
+          disabled={grant.busy || blocked !== undefined}
+          title={blocked}
           onClick={() => setConfirming(true)}
         >
           Generate key and grant
         </button>
-        {chosen.length === 0 && (
-          <span className="small quiet">
-            The contract refuses a grant that discloses nothing.
-          </span>
-        )}
-        {selected?.stored === undefined && (
-          <span className="small quiet">This wallet cannot open that invoice.</span>
-        )}
+        {blocked !== undefined && <span className="small quiet">{blocked}</span>}
         <ActionFeedback state={grant.state} />
       </div>
 
@@ -353,7 +362,7 @@ const GrantAudit = ({
           <p>
             This puts a grant on chain for invoice {truncateHex(invoiceId, 10, 6)} covering{' '}
             {chosen.map((scope) => SCOPE_LABELS[scope].title).join(', ')}, valid until{' '}
-            {formatDateTime(safeExpiry(expiry))}.
+            {formatDateTime(expiresAt)}.
           </p>
           <p>
             Which fields you opened is public. What they contain is not, and neither is the
@@ -591,21 +600,6 @@ export const Audit = ({
           </p>
         </div>
       </div>
-
-      {!auditModuleAvailable() && (
-        <div className="callout callout-danger" role="alert">
-          <span className="callout-title">
-            The contract package does not export its audit module
-          </span>
-          Envelopes are built and checked by <code className="mono">@quietbooks/contract</code>,
-          never here, because every field commitment has to be recomputed through the compiled
-          circuits. <code className="mono">contract/src/audit.ts</code> exists in this tree but{' '}
-          <code className="mono">contract/src/index.ts</code> does not re-export it, so neither
-          half of this screen can run. Adding{' '}
-          <code className="mono">export * from './audit.js';</code> to that index is the whole
-          fix.
-        </div>
-      )}
 
       <div className="split">
         <div className="panel">

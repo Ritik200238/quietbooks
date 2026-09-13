@@ -21,12 +21,14 @@ import {
   formatAmount,
   fromLocalInputValue,
   isHex32,
+  isZeroHex,
   messageOf,
   normaliseHex,
   parseAmount,
   parseCount,
   todayInputValue,
 } from '../lib/format';
+import { PAUSED_REASON, blockedBy } from '../lib/guards';
 import { routePath, navigate } from '../state/router';
 import { useConnected, useSession } from '../state/session';
 import { useAction } from '../state/useAction';
@@ -84,7 +86,7 @@ const readLine = (
 
 export const NewInvoice = (): JSX.Element => {
   const { api, contractAddress } = useConnected();
-  const { refresh } = useSession();
+  const { state, refresh } = useSession();
 
   const [lines, setLines] = useState<readonly LineDraft[]>([emptyLine(0)]);
   const [nextKey, setNextKey] = useState(1);
@@ -127,6 +129,36 @@ export const NewInvoice = (): JSX.Element => {
   const taxValue = 'value' in parsedTax ? parsedTax.value : 0n;
   const total = subtotal + taxValue;
 
+  // `issueInvoice` opens with `assertNotPaused()`, and `assertTermsValid` then
+  // requires a buyer key that is set and is not the seller's own. Each of those
+  // costs a minute of proving before the contract refuses the call, so the form
+  // refuses first and says which one it is.
+  const ownPartyKey = state?.partyKey;
+  const buyerIsUs =
+    ownPartyKey !== undefined &&
+    isHex32(buyerKey) &&
+    normaliseHex(buyerKey) === normaliseHex(ownPartyKey);
+
+  const buyerKeyChecks: readonly (readonly [boolean, string])[] = [
+    [!isHex32(buyerKey), 'A party key is 64 hexadecimal characters.'],
+    [isZeroHex(buyerKey), 'A key of all zeroes belongs to nobody. The contract refuses it.'],
+    [buyerIsUs, 'That is your own party key. The buyer has a different one.'],
+  ];
+
+  // The field stays quiet about an empty box, which is not a mistake until the
+  // invoice is submitted. The submit button says that part.
+  const buyerKeyProblem = buyerKey.trim().length === 0 ? undefined : blockedBy(buyerKeyChecks);
+
+  const blocked = blockedBy([
+    [state?.paused === true, PAUSED_REASON],
+    [buyerKey.trim().length === 0, 'Ask the buyer for their party key and paste it below.'],
+    ...buyerKeyChecks,
+    [
+      arbiterKey.trim().length > 0 && !isHex32(arbiterKey),
+      'The arbiter key is 64 hexadecimal characters, or leave it empty.',
+    ],
+  ]);
+
   const issue = useAction(
     async () => {
       const draft: InvoiceDraft = {
@@ -167,6 +199,9 @@ export const NewInvoice = (): JSX.Element => {
   }, 'Assembling the record');
 
   const validate = useCallback((): string | undefined => {
+    if (blocked !== undefined) {
+      return blocked;
+    }
     if (items.length === 0) {
       return 'An invoice needs at least one line that parses.';
     }
@@ -182,12 +217,6 @@ export const NewInvoice = (): JSX.Element => {
     if (currency.trim().length === 0) {
       return 'A currency code is required.';
     }
-    if (!isHex32(buyerKey)) {
-      return 'The buyer key is 64 hexadecimal characters. Ask the buyer for the party key shown in their header.';
-    }
-    if (arbiterKey.trim().length > 0 && !isHex32(arbiterKey)) {
-      return 'The arbiter key is 64 hexadecimal characters, or leave it empty.';
-    }
     try {
       const due = fromLocalInputValue(dueDate);
       if (due <= daysFromNow(0)) {
@@ -197,7 +226,7 @@ export const NewInvoice = (): JSX.Element => {
       return messageOf(error);
     }
     return undefined;
-  }, [items, lines, parsedTax, taxValue, subtotal, currency, buyerKey, arbiterKey, dueDate]);
+  }, [blocked, items, lines, parsedTax, taxValue, subtotal, currency, dueDate]);
 
   const onSubmit = useCallback(
     (event: FormEvent) => {
@@ -565,12 +594,8 @@ export const NewInvoice = (): JSX.Element => {
             onChange={setBuyerKey}
             mono
             placeholder="64 hexadecimal characters"
-            hint="The buyer reads this off their own header. It is derived from their secret and this deployment’s salt, so it is theirs alone and only here."
-            error={
-              buyerKey.trim().length > 0 && !isHex32(buyerKey)
-                ? 'A party key is 64 hexadecimal characters.'
-                : undefined
-            }
+            hint="Ask the buyer for the key on their header, not the one on yours. It is derived from their secret and this deployment’s salt, so it is theirs alone and only here."
+            error={buyerKeyProblem}
           />
           <TextField
             label="Arbiter party key (optional)"
@@ -587,7 +612,12 @@ export const NewInvoice = (): JSX.Element => {
           />
         </div>
         <div className="panel-foot">
-          <button type="submit" className="button button-primary" disabled={issue.busy}>
+          <button
+            type="submit"
+            className="button button-primary"
+            disabled={issue.busy || blocked !== undefined}
+            title={blocked}
+          >
             Issue invoice
           </button>
           <button
@@ -598,6 +628,7 @@ export const NewInvoice = (): JSX.Element => {
           >
             Discard
           </button>
+          {blocked !== undefined && <span className="small quiet">{blocked}</span>}
           <ActionFeedback state={issue.state} />
           {formError !== undefined && issue.state.status !== 'working' && (
             <span className="field-error" role="alert">
