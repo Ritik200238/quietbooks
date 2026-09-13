@@ -49,6 +49,7 @@ import {
   toLocalInputValue,
   truncateHex,
 } from '../lib/format';
+import { PAUSED_REASON, blockedBy } from '../lib/guards';
 import { LOCKED_AMOUNT_REASON, openedInvoice } from '../lib/invoice-display';
 import { routePath } from '../state/router';
 import { useConnected, useSession } from '../state/session';
@@ -66,17 +67,6 @@ const PROVING_NOTE = 'Building the proof and submitting. This can take a minute.
 const SEALED_REASON =
   'This wallet does not hold the openings for this invoice, and the call proves them. ' +
   'Import the record from the counterparty first.';
-
-const PAUSED_REASON = 'The deployment is paused, so the contract refuses this call.';
-
-/**
- * The first reason an action cannot run, or nothing.
- *
- * A disabled button with no explanation is a dead end, so every action states
- * the first thing standing in its way rather than only the last.
- */
-const blockedBy = (checks: readonly (readonly [boolean, string])[]): string | undefined =>
-  checks.find(([blocked]) => blocked)?.[1];
 
 // ---------------------------------------------------------------------------
 // Actions
@@ -268,6 +258,20 @@ const FundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element => 
   const [value, setValue] = useState('');
   const [deadline, setDeadline] = useState(toLocalInputValue(nowSeconds() + 14n * 86_400n));
 
+  // The circuit is handed the deadline and the funding time in the same call and
+  // asserts the first is after the second, so a deadline already behind us costs
+  // a minute of proving and then fails. `fromLocalInputValue` throws on a
+  // half-typed field, which is a state this form passes through on every
+  // keystroke, so the parse is kept apart from the check.
+  const now = nowSeconds();
+  const deadlineAt = useMemo((): bigint | undefined => {
+    try {
+      return fromLocalInputValue(deadline);
+    } catch {
+      return undefined;
+    }
+  }, [deadline]);
+
   const action = useAction(async () => {
     await api.fundEscrow(
       view.invoiceId,
@@ -290,6 +294,11 @@ const FundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element => 
     [
       /^\d+$/.test(value.trim()) && BigInt(value.trim()) === 0n,
       'The contract refuses an escrow of zero.',
+    ],
+    [deadlineAt === undefined, 'Give a refund deadline this browser can read as a date and time.'],
+    [
+      deadlineAt !== undefined && deadlineAt <= now,
+      'The refund deadline has to be later than now. Pick one further out.',
     ],
   ]);
 
@@ -370,7 +379,7 @@ const FundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element => 
           type="datetime-local"
           value={deadline}
           onChange={setDeadline}
-          hint="After this, and only after it, you can refund yourself. Public on the anchor."
+          hint="After this, and only after it, you can refund yourself. It has to be in the future. Public on the anchor."
         />
       </div>
     </ActionCard>
@@ -716,6 +725,12 @@ export const InvoiceDetail = ({ invoiceId }: { readonly invoiceId: string }): JS
   const hasArbiter = !isZeroHex(toHex(anchor.arbiterKey));
   const status = anchor.status;
 
+  // `resolveDispute` writes a zero receipt deliberately, and it is the only
+  // circuit that does: a receipt commits to the payer under a salt only that
+  // payer holds, and the arbiter is neither party. Every other settlement path
+  // commits one, so a zero here means this invoice was ruled, not paid.
+  const ruledByArbiter = settlement !== undefined && isZeroHex(toHex(settlement.receipt));
+
   const canSettle = role === 'buyer' && status === InvoiceStatus.issued;
   const canAttest = role === 'seller' && status === InvoiceStatus.issued;
   const canCancel = role === 'seller' && status === InvoiceStatus.issued;
@@ -904,14 +919,26 @@ export const InvoiceDetail = ({ invoiceId }: { readonly invoiceId: string }): JS
                   <dd>
                     <Digest value={toHex(settlement.note)} label="the settlement note" />
                   </dd>
-                  <dt>Receipt commitment</dt>
-                  <dd>
-                    <Digest value={toHex(settlement.receipt)} label="the receipt commitment" />
-                  </dd>
+                  {ruledByArbiter ? (
+                    <>
+                      <dt>Receipt</dt>
+                      <dd>
+                        <span className="quiet">None. The arbiter decided this one.</span>
+                      </dd>
+                    </>
+                  ) : (
+                    <>
+                      <dt>Receipt commitment</dt>
+                      <dd>
+                        <Digest value={toHex(settlement.receipt)} label="the receipt commitment" />
+                      </dd>
+                    </>
+                  )}
                 </dl>
                 <p className="small quiet" style={{ marginTop: 12 }}>
-                  The receipt commitment binds this settlement to this invoice and this payer
-                  without either being recomputable from the digest alone.
+                  {ruledByArbiter
+                    ? 'A receipt binds a settlement to the party who paid it, under a salt only that party holds. Nobody paid this one: the arbiter ruled and the contract moved the escrowed coin. The arbiter is not a party and holds no salt, so the contract writes an empty receipt rather than a digest that would bind nothing.'
+                    : 'The receipt commitment binds this settlement to this invoice and this payer without either being recomputable from the digest alone.'}
                 </p>
               </div>
             </div>

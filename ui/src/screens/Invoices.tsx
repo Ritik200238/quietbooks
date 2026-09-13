@@ -13,11 +13,13 @@ import { useMemo, useState } from 'react';
 import { InvoiceStatus, statusLabel, type InvoiceView } from '@quietbooks/api';
 import { nowSeconds } from '@quietbooks/contract';
 
+import { ActionCard } from '../components/ActionCard';
 import { OverduePill, StatusPill } from '../components/Pills';
 import { formatDate, relativeDays, truncateHex } from '../lib/format';
 import { LOCKED_AMOUNT_REASON, openedInvoice } from '../lib/invoice-display';
 import { routePath } from '../state/router';
-import { useSession } from '../state/session';
+import { useConnected, useSession } from '../state/session';
+import { useAction } from '../state/useAction';
 
 type RoleFilter = 'all' | 'seller' | 'buyer' | 'arbiter' | 'observer';
 type StatusFilter = 'all' | 'open' | 'overdue' | 'settled' | 'escrow' | 'disputed' | 'closed';
@@ -63,6 +65,70 @@ const matchesStatus = (view: InvoiceView, filter: StatusFilter): boolean => {
         view.anchor.status === InvoiceStatus.refunded
       );
   }
+};
+
+/**
+ * The pause switch, for the one wallet that holds the administrator key.
+ *
+ * It lives at the foot of this screen rather than on a screen of its own,
+ * because the pause is a property of the deployment and this is the screen that
+ * shows the deployment. `setPaused` is the only administrative circuit the
+ * contract has: the role cannot move funds, read terms, or be handed on.
+ */
+const Administration = ({ paused }: { readonly paused: boolean }): JSX.Element => {
+  const { api } = useConnected();
+  const { refresh } = useSession();
+
+  const action = useAction(async () => {
+    await api.setPaused(!paused);
+    await refresh();
+  }, 'Building the proof and submitting. This can take a minute.');
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>Administration</h2>
+        <span className="tag">Admin</span>
+      </div>
+      <ActionCard
+        title={paused ? 'Resume this deployment' : 'Pause this deployment'}
+        description={
+          paused
+            ? 'Let the contract accept state-advancing calls again. Issuing, settling, escrow, disputes and new audit grants all start working the moment this lands.'
+            : 'Stop the contract accepting state-advancing calls: issuing, settling, escrow, disputes and new audit grants. Reading records and revoking an audit grant are not affected, so nobody is shut out of their own invoices.'
+        }
+        buttonLabel={paused ? 'Resume' : 'Pause'}
+        tone={paused ? 'primary' : 'danger'}
+        state={action.state}
+        busy={action.busy}
+        successNote="Done. The ledger has been re-read."
+        confirm={{
+          title: paused ? 'Resume this deployment?' : 'Pause this deployment?',
+          confirmLabel: paused ? 'Resume' : 'Pause',
+          tone: paused ? 'normal' : 'danger',
+          body: paused ? (
+            <p>
+              Everyone on this deployment can issue, settle, escrow and dispute again as soon as
+              this transaction lands.
+            </p>
+          ) : (
+            <>
+              <p>
+                Every party on this deployment stops where they are: no invoice can be issued,
+                paid, escrowed, released or disputed until you resume it.
+              </p>
+              <p>
+                That includes a refund. A buyer whose escrow deadline passes while the pause is
+                on cannot take their own money back, because that call is stopped too. You are
+                the only wallet that can lift it.
+              </p>
+            </>
+          ),
+        }}
+        onRun={() => void action.run()}
+      />
+    </div>
+  );
 };
 
 const LockedAmount = (): JSX.Element => (
@@ -290,6 +356,8 @@ export const Invoices = (): JSX.Element => {
         {statusLabel(InvoiceStatus.disputed)}, {statusLabel(InvoiceStatus.resolved)},{' '}
         {statusLabel(InvoiceStatus.cancelled)}, {statusLabel(InvoiceStatus.refunded)}.
       </p>
+
+      {state.isAdmin && <Administration paused={state.paused} />}
     </div>
   );
 };

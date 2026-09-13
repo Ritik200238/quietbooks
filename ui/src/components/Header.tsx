@@ -206,6 +206,13 @@ export const Header = (): JSX.Element => {
             <span className="callout-title">This deployment is paused</span>
             The administrator has stopped every state-advancing call. Reading records and
             revoking an audit grant still work; issuing, settling and escrow do not.
+            {state?.isAdmin === true && (
+              <>
+                {' '}
+                You are that administrator: the switch that lifts it is at the foot of the{' '}
+                <a href={routePath({ name: 'invoices' })}>invoice list</a>.
+              </>
+            )}
           </div>
         </div>
       )}

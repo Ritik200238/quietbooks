@@ -168,8 +168,9 @@ export const Connect = (): JSX.Element => {
         </div>
         <div className="panel-body stack">
           <p className="note">
-            You become the administrator of the new deployment. The administrator can pause
-            state-advancing calls and hand the role on. It cannot move funds, read anybody’s
+            You become the administrator of the new deployment, and nobody else ever can: the
+            role is fixed at deployment and cannot be handed on. The administrator can pause
+            state-advancing calls and resume them again. It cannot move funds, read anybody’s
             terms, or change an invoice.
           </p>
           <p className="note">
