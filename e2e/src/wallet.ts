@@ -21,6 +21,7 @@ import {
   type CoinPublicKey,
   type EncPublicKey,
   type FinalizedTransaction,
+  type SyntheticCost,
 } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import type {
   MidnightProvider,
@@ -49,9 +50,14 @@ if (typeof globalThis.WebSocket !== 'function') {
 
 const DUST_OPTIONS: DustWalletOptions = {
   ledgerParams: LedgerParameters.initialParameters(),
-  // The undeployed preset prices fees differently from a public network. This
-  // margin is what midnight-local-dev uses against the same node image.
-  additionalFeeOverhead: 500_000_000_000_000_000n,
+  // This is the value midnight-local-dev uses against this same node image.
+  //
+  // It is worth stating why it is not larger. The bboard CLI applies an overhead
+  // of 5e17 on the undeployed preset, but the genesis wallet on this preset holds
+  // 5e14 NIGHT. An overhead a thousand times the entire balance makes every
+  // transaction unfundable, and the wallet reports that as a bare
+  // "Transaction submission error" with no cause attached.
+  additionalFeeOverhead: 1_000n,
   feeBlocksMargin: 5,
 };
 
@@ -204,6 +210,95 @@ export const registerForDust = async (ctx: WalletContext, logger: Logger): Promi
   logger.info('DUST is spendable');
 };
 
+const COST_DIMENSIONS = [
+  'readTime',
+  'computeTime',
+  'blockUsage',
+  'bytesWritten',
+  'bytesChurned',
+] as const satisfies readonly (keyof SyntheticCost)[];
+
+/**
+ * The block limit for each cost dimension, in that dimension's own units.
+ *
+ * The ledger does not expose the limits directly. It exposes
+ * `normalizeFullness`, which divides a cost by the limits and throws if any
+ * dimension exceeds 1. Feeding it a unit vector -- one dimension set to a known
+ * value, the rest zero -- therefore returns that dimension's fraction of its
+ * limit, and the limit is the value divided by the fraction.
+ *
+ * This is derived rather than hardcoded so it stays correct if the parameters
+ * change.
+ */
+export const blockLimits = (params: LedgerParameters): Record<string, bigint> => {
+  const limits: Record<string, bigint> = {};
+
+  for (const dimension of COST_DIMENSIONS) {
+    const unit = (value: bigint): SyntheticCost =>
+      Object.fromEntries(
+        COST_DIMENSIONS.map((d) => [d, d === dimension ? value : 0n]),
+      ) as unknown as SyntheticCost;
+
+    const fractionAt = (value: bigint): number | undefined => {
+      try {
+        return params.normalizeFullness(unit(value))[dimension];
+      } catch {
+        return undefined;
+      }
+    };
+
+    // Climb until the probe is rejected, keeping the last accepted value. The
+    // limits differ by many orders of magnitude between dimensions -- picoseconds
+    // of compute against bytes of blockspace -- so a fixed probe cannot serve
+    // all five.
+    let accepted = 0n;
+    let probe = 1n;
+    while (probe < 1n << 60n) {
+      if (fractionAt(probe) === undefined) break;
+      accepted = probe;
+      probe *= 2n;
+    }
+
+    const fraction = accepted > 0n ? fractionAt(accepted) : undefined;
+    limits[dimension] =
+      fraction !== undefined && fraction > 0
+        ? BigInt(Math.round(Number(accepted) / fraction))
+        : 0n;
+  }
+
+  return limits;
+};
+
+/**
+ * Describe a transaction's cost as a percentage of each block limit.
+ *
+ * A node rejects an oversized transaction with nothing but
+ * "1010: Transaction would exhaust the block limits", which does not say which
+ * limit or by how much. This says both.
+ */
+export const describeCost = (tx: FinalizedTransaction, params: LedgerParameters): string => {
+  const cost = tx.cost(params);
+  const limits = blockLimits(params);
+  const parts = [`serialized=${tx.serialize().length}B`, ...COST_DIMENSIONS.map((dimension) => {
+    const used = cost[dimension];
+    const limit = limits[dimension] ?? 0n;
+    if (limit === 0n) return `${dimension}=${used} (limit unknown)`;
+    const percent = (Number(used) / Number(limit)) * 100;
+    return `${dimension}=${used}/${limit} (${percent.toFixed(1)}%)`;
+  })];
+  return parts.join('  ');
+};
+
+/** The dimensions this transaction exceeds, empty if it fits in a block. */
+export const overBlockLimit = (tx: FinalizedTransaction, params: LedgerParameters): string[] => {
+  const cost = tx.cost(params);
+  const limits = blockLimits(params);
+  return COST_DIMENSIONS.filter((dimension) => {
+    const limit = limits[dimension] ?? 0n;
+    return limit > 0n && cost[dimension] > limit;
+  });
+};
+
 /** Adapter satisfying midnight-js's wallet and submission interfaces. */
 export class E2EWalletProvider implements WalletProvider, MidnightProvider {
   constructor(
@@ -235,6 +330,20 @@ export class E2EWalletProvider implements WalletProvider, MidnightProvider {
   }
 
   async submitTx(tx: FinalizedTransaction): Promise<string> {
+    const params = LedgerParameters.initialParameters();
+    this.logger.info(`transaction cost: ${describeCost(tx, params)}`);
+
+    const exceeded = overBlockLimit(tx, params);
+    if (exceeded.length > 0) {
+      // The node would reject this with an opaque RPC code. Saying which
+      // dimension is over, before submitting, is the difference between a
+      // report that is actionable and one that is not.
+      throw new Error(
+        `transaction exceeds the block limit on ${exceeded.join(', ')}. ` +
+          `Cost: ${describeCost(tx, params)}`,
+      );
+    }
+
     const id = await this.ctx.wallet.submitTransaction(tx);
     this.logger.info(`submitted ${id}`);
     return id;
