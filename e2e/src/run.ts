@@ -558,11 +558,11 @@ const main = async (): Promise<void> => {
     // reads the staged invoice, and the API was the one settlement method that
     // did not stage. The circuit was fine and the product was not. Driving the
     // real API for at least one write means that class of bug fails here.
-    const api = await step('a party who has never seen this deployment can join it', async () => {
-      // Starting the way a second party does: with nothing stored for this
-      // contract. Reusing the store this run already wrote would pass for the
-      // wrong reason, which is exactly what it used to do.
-      await providers.privateStateProvider.remove('quietBooksPrivateState');
+    //
+    // This is the buyer, so it joins on the secret this run has been using and
+    // the openings it has been accumulating. A wallet that cannot open the
+    // invoice cannot release its escrow, and should not be able to.
+    const api = await step('the buyer opens the deployment through the API', async () => {
       const joined = await QuietBooksAPI.join(providers, address, secret, logger);
       assert(
         joined.deployedContractAddress === address,
@@ -593,6 +593,31 @@ const main = async (): Promise<void> => {
       assert(record.settled === 2n, 'the seller was not credited the escrow settlement');
     });
 
+
+    // -----------------------------------------------------------------------
+    // Last, because it deliberately throws away this run's private state.
+    //
+    // The point of this step is the SECOND party, so it has to start the way a
+    // second party does: with nothing stored for this contract and a secret of
+    // its own. An earlier version reused the store this run had already written
+    // and passed for the wrong reason, which hid a real bug -- midnight-js reads
+    // the private state by contract address and asserts it is defined, so a
+    // genuinely fresh wallet threw `No private state found at private state ID`
+    // and the only path that ever worked was the deployer rejoining.
+    await step('a party who has never seen this deployment can join it', async () => {
+      await providers.privateStateProvider.remove('quietBooksPrivateState');
+
+      const stranger = await QuietBooksAPI.join(providers, address, randomBytes32(), logger);
+      assert(
+        stranger.deployedContractAddress === address,
+        'joined a different contract than expected',
+      );
+
+      // And it sees the deployment without being able to open anybody's terms,
+      // which is the product working rather than a permission failure.
+      const l = await readLedger();
+      assert(l.invoices.member(invoiceId), 'the stranger cannot see the public invoice anchor');
+    });
   } finally {
     await walletCtx.wallet.stop().catch(() => undefined);
   }
