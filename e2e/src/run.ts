@@ -203,7 +203,10 @@ const main = async (): Promise<void> => {
       privateStateProvider: levelPrivateStateProvider<'quietBooksPrivateState', QuietBooksPrivateState>({
         privateStateStoreName: 'quietbooks-e2e-private-state',
         signingKeyStoreName: 'quietbooks-e2e-signing-keys',
-        privateStoragePasswordProvider: () => 'quietbooks-e2e',
+        // The store enforces a passphrase policy -- sixteen characters over at
+        // least three character classes -- and only enforces it on the first
+        // write, which for a deploy is after the contract is already on chain.
+        privateStoragePasswordProvider: () => 'QuietBooks-e2e-local-1',
         accountId: GENESIS_SEED,
       }),
       publicDataProvider: indexerPublicDataProvider(ENV.indexer, ENV.indexerWS),
@@ -396,8 +399,15 @@ const main = async (): Promise<void> => {
     });
 
     // -----------------------------------------------------------------------
-    await step('prove reliability without opening an invoice', async () => {
-      await deployed.callTx.proveReliability(SELLER_PIN, 1n, 1n, 0n);
+    await step('the chain credits the seller a settlement', async () => {
+      // The counters are public ledger state, so a reader takes them from the
+      // chain rather than through a circuit. What matters is that the contract
+      // wrote them, not the caller: a party cannot inflate its own record.
+      const l = await readLedger();
+      const record = l.reliability.lookup(sellerKey);
+      assert(record.settled === 1n, 'seller was not credited a settlement');
+      assert(record.cancelled === 0n, 'seller was credited a cancellation that never happened');
+      assert(record.disputesLost === 0n, 'seller was credited a lost dispute that never happened');
     });
 
     // -----------------------------------------------------------------------
