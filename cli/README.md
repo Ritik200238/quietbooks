@@ -122,7 +122,7 @@ the wallet and tears the containers down.
 | 9 | Escrow | Fund, release, refund. Funding prints a warning first: it publishes the amount. |
 | 10 | Dispute | Open, and resolve as the arbiter. |
 | 11 | Audit | Grant a named set of fields with an expiry, or revoke. The audit key is generated and printed once. |
-| 12 | Reliability | The contract's own counters, and a threshold proof against them. |
+| 12 | Reliability | The contract's own counters. The threshold proof against them is Wave 2; see the repository README. |
 | 13 | My identity | Party key, administrative key, whether this wallet is the administrator. |
 | 0 | Exit | Stops the wallet and closes the store. |
 
