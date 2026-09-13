@@ -37,7 +37,12 @@ Midnight Foundation (https://github.com/midnightntwrk)
       shed a linkable history, are taken from this example.
 
   midnightntwrk/example-counter                         Apache-2.0
-      The minimal compile target used to verify a toolchain installation.
+      The minimal compile target used to verify a toolchain installation. Its
+      contract source is reproduced verbatim at `e2e/counter-src/counter.compact`
+      and deployed by `e2e/src/control.ts`: when our own deploy failed at
+      submission, deploying a one-circuit contract through the identical wallet
+      and providers was what separated a fault in our contract from a fault in
+      the environment.
 
   midnightntwrk/midnight-local-dev                      Apache-2.0
       The local network composition in `localnet/standalone.yml`, the image
