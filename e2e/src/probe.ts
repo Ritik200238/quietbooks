@@ -85,7 +85,7 @@ const main = async (): Promise<void> => {
       privateStateProvider: levelPrivateStateProvider({
         privateStateStoreName: `quietbooks-probe-${LABEL}-private-state`,
         signingKeyStoreName: `quietbooks-probe-${LABEL}-signing-keys`,
-        privateStoragePasswordProvider: () => 'QuietBooks-probe-1',
+        privateStoragePasswordProvider: () => 'QuietBooks-probe-local-1',
         accountId: GENESIS_SEED,
       }),
       publicDataProvider: indexerPublicDataProvider(ENV.indexer, ENV.indexerWS),

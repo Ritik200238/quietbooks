@@ -71,7 +71,7 @@ const main = async (): Promise<void> => {
         // The store enforces a password policy: at least three of uppercase,
         // lowercase, digits and special characters. A local-only literal is
         // fine here, but it still has to satisfy the policy.
-        privateStoragePasswordProvider: () => 'QuietBooks-control-1',
+        privateStoragePasswordProvider: () => 'QuietBooks-control-local-1',
         accountId: GENESIS_SEED,
       }),
       publicDataProvider: indexerPublicDataProvider(ENV.indexer, ENV.indexerWS),
