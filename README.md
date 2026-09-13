@@ -164,6 +164,7 @@ ui/           Vite + React interface
 cli/          Interactive Node CLI
 e2e/          End-to-end run against a real network
 localnet/     A self-contained Midnight network (Docker Compose)
+docs/         The Wave 1 pitch deck, as a single self-contained page
 ```
 
 `contract/src/quietbooks.compact` is the place to start reading. Its header
