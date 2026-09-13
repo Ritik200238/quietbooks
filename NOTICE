@@ -58,10 +58,14 @@ OpenZeppelin (https://github.com/OpenZeppelin)
 ----------------------------------------------
 
   OpenZeppelin/compact-contracts                        MIT
-      The shielded custody model. `ShieldedTreasury` and
+      The shielded custody model, twice over. `ShieldedTreasury` and
       `ShieldedTreasuryStateless` document, in their own headers, that a
-      contract holding a shielded coin necessarily publishes its value. That
-      finding shaped QuietBooks' central design decision: the private
+      contract holding a shielded coin necessarily publishes its value.
+      `ForwarderShielded._deposit` shows the way around it: `receiveShielded`
+      followed by `sendImmediateShielded` in one call routes a payment without
+      ever holding it, so the balance never moves and the value stays hidden.
+      `settleWithNote` is that pattern, applied to an invoice. Between them
+      these shaped QuietBooks' central design decision: the private
       settlement path does not take custody, and the escrow path does and says
       so. The `Ownable` witness-derived account identity and the per-module
       initialisation flag are also modelled on this library.

@@ -375,16 +375,31 @@ export class QuietBooksAPI {
   }
 
   /**
-   * Settle by binding a shielded transfer made in the same transaction.
+   * Settle privately: pay the seller inside the transaction that records it.
    *
-   * `note` is the Zswap note commitment of the output the payer's wallet created
-   * for the seller. The contract refuses the call unless that commitment is
-   * genuinely present in the containing transaction, which is what makes this a
-   * binding settlement rather than an assertion.
+   * The buyer hands over a shielded coin. The contract takes it with
+   * `receiveShielded` and forwards it to `sellerPayout` with
+   * `sendImmediateShielded` in the same call, so its balance changes by zero and
+   * it never has custody. Zswap hides the value on both legs.
+   *
+   * The coin's value must equal the invoice total, and the circuit checks that
+   * against the terms the caller proves they hold. Neither figure reaches public
+   * state, and a buyer cannot mark an invoice settled by underpaying it.
+   *
+   * `coin.nonce` must be fresh. It identifies this coin, and reusing one names a
+   * coin the ledger already knows about.
+   *
+   * One caveat, and it is the reason this is not yet the default path in the
+   * interface: building the output to the seller needs the seller's Zswap
+   * *encryption* public key, not just the party key the invoice carries. Paying
+   * an address this wallet does not already know requires that key to have
+   * travelled out of band, and `callTx` has no argument for supplying it.
+   * Settling to a key this wallet holds works today.
    */
   async settleWithNote(
     invoiceId: string,
-    note: Uint8Array,
+    coin: { nonce: Uint8Array; color: Uint8Array; value: bigint },
+    sellerPayout: Uint8Array,
     options: CallOptions = {},
   ): Promise<void> {
     const pin = options.pin ?? DEFAULT_PIN;
@@ -393,7 +408,8 @@ export class QuietBooksAPI {
         await this.deployedContract.callTx.settleWithNote(
           fromHex(invoiceId),
           pin,
-          note,
+          coin,
+          { bytes: sellerPayout },
           nowSeconds(),
         );
       } catch (error) {

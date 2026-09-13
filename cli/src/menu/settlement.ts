@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import { sha256, toHex } from '@quietbooks/contract';
+import { fromHex, randomBytes32, sha256, toHex, ZERO32 } from '@quietbooks/contract';
 
 import type { AppContext } from '../context.js';
-import { heading, out } from '../format.js';
+import { groupDigits, heading, out } from '../format.js';
 import { confirmRole, selectInvoice } from '../select.js';
 
 // ---------------------------------------------------------------------------
@@ -14,16 +14,11 @@ import { confirmRole, selectInvoice } from '../select.js';
 
 export const settleWithNote = async (context: AppContext): Promise<void> => {
   out(heading('Settle an invoice with a shielded transfer'));
-  out('  The buyer pays the seller directly, then binds that payment to the invoice.');
-  out('  The amount stays hidden: the chain never learns it.');
-  out('');
-  out('  Read this before you type a commitment. The circuit calls');
-  out('  claimZswapCoinReceive, so the ledger accepts this call only if that exact');
-  out('  note commitment is an output of the very transaction carrying the call. This');
-  out('  CLI submits the contract call alone .. it does not build the payment output');
-  out('  for you. Unless your wallet has put that output into the same transaction,');
-  out('  the ledger will refuse this, and it is meant to: the alternative would be a');
-  out('  settlement that is only the payer\'s word.');
+  out('  The buyer pays the seller inside the same transaction that records the');
+  out('  settlement. The contract takes the coin and forwards it on in one call, so');
+  out('  it never holds the money and its balance does not move. Zswap hides the');
+  out('  value on both legs: the chain learns that this invoice was paid, not what');
+  out('  it was paid.');
   out('');
 
   const view = await selectInvoice(context, '  Settle which invoice?');
@@ -34,15 +29,37 @@ export const settleWithNote = async (context: AppContext): Promise<void> => {
     out('  Nothing was sent.');
     return;
   }
-
-  const note = await context.ask.hex32('  Note commitment of the payment output (64 hex)');
-  if (note === undefined) {
+  if (view.payable === undefined) {
+    out('  This wallet cannot open that invoice, so it cannot know what to pay.');
     return;
   }
 
-  out('  Proving and submitting.');
-  await context.api.settleWithNote(view.invoiceId, note);
-  out(`  Settled ${view.invoiceId} against note ${toHex(note)}.`);
+  // The circuit compares the coin against the terms the caller proves they hold
+  // and refuses anything but the exact total, so there is nothing to ask here.
+  out(`  Amount to pay: ${groupDigits(view.payable)} (the invoice total, checked by the circuit).`);
+  out('');
+  out('  Where should the payment go? This is the seller\'s Zswap coin public key,');
+  out('  which is not the party key on the invoice .. a party key is a hash and');
+  out('  nothing can be paid to it. The seller sends you this out of band.');
+  out('');
+
+  const own = context.wallet.getCoinPublicKey();
+  const payout = await context.ask.hex32(
+    `  Seller's coin public key (64 hex, blank to pay this wallet)`,
+    { optional: true },
+  );
+  const sellerPayout = payout ?? fromHex(own);
+
+  // The nonce identifies this particular coin. A fresh one every time, because
+  // reusing one names a coin the ledger already knows about.
+  const coin = { nonce: randomBytes32(), color: ZERO32, value: view.payable };
+
+  out('');
+  out('  Proving and submitting. This builds the payment and the contract call as');
+  out('  one transaction, so either both happen or neither does.');
+  await context.api.settleWithNote(view.invoiceId, coin, sellerPayout);
+  out(`  Settled ${view.invoiceId}.`);
+  out(`  Coin nonce (keep it; an auditor needs it to verify the amount): ${toHex(coin.nonce)}`);
 };
 
 // ---------------------------------------------------------------------------
