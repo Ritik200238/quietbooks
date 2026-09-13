@@ -20,6 +20,7 @@ import {
 import {
   Contract,
   ledger,
+  pureCircuits,
   type Ledger,
 } from '../build/contract/index.js';
 
@@ -147,16 +148,19 @@ export type Actor = {
 };
 
 /**
- * Derive a party's key through the contract itself rather than recomputing the
- * hash here. `derivePartyKey` reads `instanceSalt` from the ledger, so it has to
- * run against a deployment, and routing through it means a test can never
- * disagree with the circuit about what a party key is.
+ * Derive a party's key through the contract's own circuit rather than
+ * recomputing the hash here, so a test can never disagree with the contract
+ * about what a party key is.
+ *
+ * `derivePartyKeyWith` is pure and takes the salt as an argument, so it runs
+ * without a circuit context; the salt comes from the deployment's ledger state,
+ * which is the same value the contract's internal `callerKey` reads.
  */
-export const actor = (d: Deployed, secret: Uint8Array, pin: bigint): Actor => {
-  const state = emptyPrivateState(secret);
-  const result = d.contract.impureCircuits.derivePartyKey(ctx(d, state), secret, pin);
-  return { state, pin, key: result.result };
-};
+export const actor = (d: Deployed, secret: Uint8Array, pin: bigint): Actor => ({
+  state: emptyPrivateState(secret),
+  pin,
+  key: pureCircuits.derivePartyKeyWith(led(d).instanceSalt, secret, pin),
+});
 
 // ---------------------------------------------------------------------------
 // Invoice helpers
