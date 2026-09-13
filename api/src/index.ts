@@ -20,8 +20,13 @@
 import {
   deployContract,
   findDeployedContract,
+  submitCallTx,
 } from '@midnight-ntwrk/midnight-js-contracts';
-import type { ContractAddress } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
+import type {
+  CoinPublicKey,
+  ContractAddress,
+} from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
+import type { EncPublicKey } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { concatMap, map, type Observable } from 'rxjs';
 import type { Logger } from 'pino';
 
@@ -407,29 +412,49 @@ export class QuietBooksAPI {
    * `coin.nonce` must be fresh. It identifies this coin, and reusing one names a
    * coin the ledger already knows about.
    *
-   * One caveat, and it is the reason this is not yet the default path in the
-   * interface: building the output to the seller needs the seller's Zswap
-   * *encryption* public key, not just the party key the invoice carries. Paying
-   * an address this wallet does not already know requires that key to have
-   * travelled out of band, and `callTx` has no argument for supplying it.
-   * Settling to a key this wallet holds works today.
+   * @param sellerEncryptionKey The seller's Zswap *encryption* public key.
+   *
+   * Required to pay anyone but yourself, and the reason is worth knowing.
+   * Building a shielded output means encrypting the coin's details to its
+   * recipient, so the payer needs the recipient's encryption key, not just the
+   * coin public key that names them. midnight-js resolves that key from the
+   * connected wallet, which only knows its own; for anyone else it has to be
+   * supplied, and it travels out of band with the payout key. Omit it and this
+   * throws `Unable to resolve encryption public key for recipient` before
+   * anything is proven or sent.
    */
   async settleWithNote(
     invoiceId: string,
     coin: { nonce: Uint8Array; color: Uint8Array; value: bigint },
     sellerPayout: Uint8Array,
+    sellerEncryptionKey?: EncPublicKey,
     options: CallOptions = {},
   ): Promise<void> {
     const pin = options.pin ?? DEFAULT_PIN;
     await this.withStaged(invoiceId, async () => {
       try {
-        await this.deployedContract.callTx.settleWithNote(
-          fromHex(invoiceId),
-          pin,
-          coin,
-          { bytes: sellerPayout },
-          nowSeconds(),
-        );
+        // `callTx` fixes the encryption-key mappings when the interface is
+        // built and takes no argument for them, so paying a third party has to
+        // go through `submitCallTx`. Everything else about the call is the same.
+        await submitCallTx(this.providers, {
+          compiledContract: CompiledQuietBooksContract,
+          circuitId: 'settleWithNote',
+          contractAddress: this.deployedContractAddress,
+          privateStateId: quietBooksPrivateStateKey,
+          args: [
+            fromHex(invoiceId),
+            pin,
+            coin,
+            { bytes: sellerPayout },
+            nowSeconds(),
+          ],
+          additionalCoinEncPublicKeyMappings:
+            sellerEncryptionKey === undefined
+              ? undefined
+              : new Map<CoinPublicKey, EncPublicKey>([
+                  [toHex(sellerPayout) as CoinPublicKey, sellerEncryptionKey],
+                ]),
+        });
       } catch (error) {
         failed('settleWithNote', error);
       }

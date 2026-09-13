@@ -58,6 +58,8 @@ import {
 
 import { encodeCoinPublicKey } from '@midnight-ntwrk/compact-runtime';
 
+import { QuietBooksAPI } from '@quietbooks/api';
+
 import { buildWallet, waitForSync, waitForFunds, registerForDust, E2EWalletProvider } from './wallet.js';
 
 // ---------------------------------------------------------------------------
@@ -548,15 +550,31 @@ const main = async (): Promise<void> => {
       );
     });
 
+    // Through the API rather than the circuit, deliberately.
+    //
+    // Every other step here calls `deployed.callTx.*` and stages the openings
+    // itself, which is how a bug in the API's own staging went unnoticed:
+    // `releaseEscrow` writes a settlement receipt committed under a witness that
+    // reads the staged invoice, and the API was the one settlement method that
+    // did not stage. The circuit was fine and the product was not. Driving the
+    // real API for at least one write means that class of bug fails here.
+    const api = await step('a party who has never seen this deployment can join it', async () => {
+      // Starting the way a second party does: with nothing stored for this
+      // contract. Reusing the store this run already wrote would pass for the
+      // wrong reason, which is exactly what it used to do.
+      await providers.privateStateProvider.remove('quietBooksPrivateState');
+      const joined = await QuietBooksAPI.join(providers, address, secret, logger);
+      assert(
+        joined.deployedContractAddress === address,
+        'joined a different contract than expected',
+      );
+      return joined;
+    });
+
     await step('the buyer releases the escrow to the seller', () =>
-      withOpenings(escrowStaging, () =>
-        deployed.callTx.releaseEscrow(
-          escrowId,
-          BUYER_PIN,
-          { bytes: encodeCoinPublicKey(walletProvider.getCoinPublicKey()) },
-          nowSeconds(),
-        ),
-      ),
+      api.releaseEscrow(toHex(escrowId), encodeCoinPublicKey(walletProvider.getCoinPublicKey()), {
+        pin: BUYER_PIN,
+      }),
     );
 
     await step('the chain shows the escrow paid out and the vault emptied', async () => {
@@ -575,30 +593,6 @@ const main = async (): Promise<void> => {
       assert(record.settled === 2n, 'the seller was not credited the escrow settlement');
     });
 
-    // -----------------------------------------------------------------------
-    await step('a party who has never seen this deployment can join it', async () => {
-      // The point of this step is the SECOND party, so it has to start the way a
-      // second party does: with nothing stored for this contract.
-      //
-      // An earlier version of this step reused the store this run had already
-      // written and passed for the wrong reason. midnight-js reads the private
-      // state by contract address and asserts it is defined, so a genuinely
-      // fresh wallet threw `No private state found at private state ID` and the
-      // only path that worked was the deployer rejoining their own deployment.
-      // Clearing it first is what makes this step mean what its name says.
-      await providers.privateStateProvider.remove('quietBooksPrivateState');
-
-      const joined = await findDeployedContract(providers, {
-        compiledContract: CompiledQuietBooksContract,
-        contractAddress: address,
-        privateStateId: 'quietBooksPrivateState',
-        initialPrivateState: emptyPrivateState(randomBytes32()),
-      });
-      assert(
-        joined.deployTxData.public.contractAddress === address,
-        'joined a different contract than expected',
-      );
-    });
   } finally {
     await walletCtx.wallet.stop().catch(() => undefined);
   }
