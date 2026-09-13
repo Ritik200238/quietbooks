@@ -22,7 +22,7 @@ import {
   findDeployedContract,
 } from '@midnight-ntwrk/midnight-js-contracts';
 import type { ContractAddress } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
-import { combineLatest, from, map, type Observable } from 'rxjs';
+import { concatMap, map, type Observable } from 'rxjs';
 import type { Logger } from 'pino';
 
 import {
@@ -107,20 +107,30 @@ export class QuietBooksAPI {
     this.deployedContractAddress = deployedContract.deployTxData.public.contractAddress;
     providers.privateStateProvider.setContractAddress(this.deployedContractAddress);
 
-    this.state$ = combineLatest(
-      [
-        providers.publicDataProvider
-          .contractStateObservable(this.deployedContractAddress, { type: 'latest' })
-          .pipe(map((contractState) => ledger(contractState.data))),
-        // Private state is re-read on every ledger tick rather than captured
-        // once: invoices are added to it continuously as the wallet issues and
-        // imports them, and a stale snapshot would leave freshly issued rows
-        // showing as unreadable until a page reload.
-        from(this.privateState()),
-      ],
-      (ledgerState, privateState) =>
-        deriveState(ledgerState, privateState, ledgerState.instanceSalt, DEFAULT_PIN),
-    );
+    // Private state is re-read on every ledger tick rather than captured once:
+    // invoices are added to it continuously as the wallet issues and imports
+    // them, and a stale snapshot leaves freshly issued rows showing as
+    // unreadable until a page reload.
+    //
+    // This has to be `concatMap` over the ledger observable, not `combineLatest`
+    // with a promise. A promise resolves once; `from` replays that one value
+    // forever, so the private state was frozen at construction and the comment
+    // above described something the code did not do. The visible symptom was a
+    // seller watching their own invoice turn "sealed to this wallet" on the next
+    // tick after issuing it.
+    this.state$ = providers.publicDataProvider
+      .contractStateObservable(this.deployedContractAddress, { type: 'latest' })
+      .pipe(
+        map((contractState) => ledger(contractState.data)),
+        concatMap(async (ledgerState) =>
+          deriveState(
+            ledgerState,
+            await this.privateState(),
+            ledgerState.instanceSalt,
+            DEFAULT_PIN,
+          ),
+        ),
+      );
   }
 
   readonly deployedContractAddress: ContractAddress;
@@ -177,6 +187,14 @@ export class QuietBooksAPI {
       compiledContract: CompiledQuietBooksContract,
       contractAddress,
       privateStateId: quietBooksPrivateStateKey,
+      // Without this, midnight-js reads the store and asserts the result is
+      // defined. The store is keyed by contract address, so a wallet that has
+      // never touched THIS deployment has nothing there and the join throws
+      // `No private state found at private state ID`. The deployer's own
+      // browser is fine, because deploying writes the state as a side effect --
+      // which is exactly why this survived: the only path that failed was the
+      // second party's, and the second party is the whole point.
+      initialPrivateState,
     });
 
     return new QuietBooksAPI(deployed, providers, logger);
@@ -487,16 +505,23 @@ export class QuietBooksAPI {
     options: CallOptions = {},
   ): Promise<void> {
     const pin = options.pin ?? DEFAULT_PIN;
-    try {
-      await this.deployedContract.callTx.releaseEscrow(
-        fromHex(invoiceId),
-        pin,
-        { bytes: sellerPayout },
-        nowSeconds(),
-      );
-    } catch (error) {
-      failed('releaseEscrow', error);
-    }
+    // Releasing writes a settlement receipt, and that receipt is committed under
+    // `settlementSalt()`, a witness that reads the staged invoice. Without the
+    // openings in place the witness throws before any proof is attempted. Every
+    // other circuit that writes a settlement stages; this one did not, and the
+    // contract tests missed it because they stage by hand.
+    await this.withStaged(invoiceId, async () => {
+      try {
+        await this.deployedContract.callTx.releaseEscrow(
+          fromHex(invoiceId),
+          pin,
+          { bytes: sellerPayout },
+          nowSeconds(),
+        );
+      } catch (error) {
+        failed('releaseEscrow', error);
+      }
+    });
   }
 
   async refundEscrow(
