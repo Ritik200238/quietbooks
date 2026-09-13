@@ -20,7 +20,15 @@ import {
   type InvoiceView,
   type QuietBooksAPI,
 } from '@quietbooks/api';
-import { fromHex, nowSeconds, scopeNames, sha256, toHex } from '@quietbooks/contract';
+import {
+  fromHex,
+  nowSeconds,
+  randomBytes32,
+  scopeNames,
+  sha256,
+  toHex,
+  ZERO32,
+} from '@quietbooks/contract';
 
 import { ActionCard } from '../components/ActionCard';
 import { CopyButton, Digest } from '../components/Copyable';
@@ -75,19 +83,24 @@ const blockedBy = (checks: readonly (readonly [boolean, string])[]): string | un
 // ---------------------------------------------------------------------------
 
 const SettleWithNote = ({ api, view, paused, onDone }: ActionProps): JSX.Element => {
-  const [note, setNote] = useState('');
+  const [payout, setPayout] = useState('');
+
   const action = useAction(async () => {
-    await api.settleWithNote(view.invoiceId, fromHex(normaliseHex(note)));
+    // The nonce identifies this one coin. Fresh every time: reusing one names a
+    // coin the ledger already knows about.
+    const coin = { nonce: randomBytes32(), color: ZERO32, value: view.payable! };
+    await api.settleWithNote(view.invoiceId, coin, fromHex(normaliseHex(payout)));
     await onDone();
   }, PROVING_NOTE);
 
   const blocked = blockedBy([
     [view.stored === undefined, SEALED_REASON],
     [paused, PAUSED_REASON],
-    [note.trim().length === 0, 'Paste the note commitment of the transfer you made.'],
+    [view.payable === undefined, 'This wallet cannot open the invoice, so it cannot know what to pay.'],
+    [payout.trim().length === 0, "Give the seller's coin public key."],
     [
-      !isHex32(note) || isZeroHex(note),
-      'A note commitment is 64 hexadecimal characters and cannot be zero.',
+      !isHex32(payout) || isZeroHex(payout),
+      'A coin public key is 64 hexadecimal characters and cannot be zero.',
     ],
   ]);
 
@@ -96,27 +109,31 @@ const SettleWithNote = ({ api, view, paused, onDone }: ActionProps): JSX.Element
       title="Settle"
       description={
         <>
-          Bind a shielded transfer you have already made to the seller to this invoice. The
-          contract checks that the note commitment you give really is an output of the
-          transaction it is in, which is what makes this a settlement rather than a claim. The
-          chain learns that this invoice was settled; it never learns for how much.
+          Pay the seller inside the same transaction that records the settlement. The contract
+          takes the coin and forwards it on in one call, so it never holds your money and its
+          balance does not move. Zswap hides the value on both legs: the chain learns that this
+          invoice was paid, not what it was paid.
         </>
       }
-      buttonLabel="Settle this invoice"
+      buttonLabel="Pay and settle"
       tone="primary"
       state={action.state}
       busy={action.busy}
       disabled={blocked !== undefined}
       disabledReason={blocked}
       confirm={{
-        title: 'Settle this invoice?',
-        confirmLabel: 'Settle',
+        title: 'Pay this invoice and settle it?',
+        confirmLabel: 'Pay and settle',
         body: (
           <>
             <p>
-              This writes a settlement record for invoice {truncateHex(view.invoiceId, 10, 6)} and
-              cannot be undone. Make sure the transfer to the seller is the one whose note
-              commitment you pasted.
+              This sends the full invoice total for {truncateHex(view.invoiceId, 10, 6)} and writes
+              the settlement record. Both happen in one transaction, so either both land or
+              neither does. It cannot be undone.
+            </p>
+            <p>
+              The circuit compares the payment against the terms you hold and refuses anything
+              but the exact total, so you cannot underpay by mistake.
             </p>
           </>
         ),
@@ -124,12 +141,12 @@ const SettleWithNote = ({ api, view, paused, onDone }: ActionProps): JSX.Element
       onRun={() => void action.run()}
     >
       <TextField
-        label="Zswap note commitment"
-        value={note}
-        onChange={setNote}
+        label="Seller's coin public key"
+        value={payout}
+        onChange={setPayout}
         mono
         placeholder="64 hexadecimal characters"
-        hint="Your wallet produced this when it created the output for the seller. QuietBooks cannot build that transfer for you: the transfer is peer to peer, which is exactly why the amount stays hidden."
+        hint="Not the party key shown on the invoice: a party key is a hash and nothing can be paid to it. The seller sends you this out of band."
       />
     </ActionCard>
   );
