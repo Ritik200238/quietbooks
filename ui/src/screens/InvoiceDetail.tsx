@@ -389,7 +389,12 @@ const ReleaseEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element 
   const blocked = blockedBy([
     [paused, PAUSED_REASON],
     [payout.trim().length === 0, 'The seller has to give you a key to pay.'],
-    [!isHex32(payout), 'A shielded coin public key is 64 hexadecimal characters.'],
+    [
+      !isHex32(payout) || isZeroHex(payout),
+      // Zero is a syntactically valid key that nothing controls. Neither the
+      // circuit nor the ledger refuses it, so a coin sent there is simply gone.
+      'A shielded coin public key is 64 hexadecimal characters and cannot be zero.',
+    ],
   ]);
 
   return (
@@ -445,7 +450,12 @@ const RefundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element =
   const blocked = blockedBy([
     [!passed, 'The contract refuses a refund before the deadline.'],
     [paused, PAUSED_REASON],
-    [!isHex32(payout), 'A shielded coin public key is 64 hexadecimal characters.'],
+    [
+      !isHex32(payout) || isZeroHex(payout),
+      // Zero is a syntactically valid key that nothing controls. Neither the
+      // circuit nor the ledger refuses it, so a coin sent there is simply gone.
+      'A shielded coin public key is 64 hexadecimal characters and cannot be zero.',
+    ],
   ]);
 
   return (
@@ -528,7 +538,12 @@ const ResolveDispute = ({ api, view, paused, onDone }: ActionProps): JSX.Element
   const blocked = blockedBy([
     [paused, PAUSED_REASON],
     [payout.trim().length === 0, 'The winning side has to give you a key to pay.'],
-    [!isHex32(payout), 'A shielded coin public key is 64 hexadecimal characters.'],
+    [
+      !isHex32(payout) || isZeroHex(payout),
+      // Zero is a syntactically valid key that nothing controls. Neither the
+      // circuit nor the ledger refuses it, so a coin sent there is simply gone.
+      'A shielded coin public key is 64 hexadecimal characters and cannot be zero.',
+    ],
   ]);
 
   return (
