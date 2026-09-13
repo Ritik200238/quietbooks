@@ -301,8 +301,8 @@ them.
   disclosed fields, and the validator that checks it against the anchor, live in
   `contract/src/audit.ts` and are not re-exported from the contract package's
   entry point, so the CLI cannot reach them without changing that package.
-* **It does not administer the contract.** `setPaused` and `rotateAdmin` exist on
-  the API and have no menu entry.
+* **It does not administer the contract.** `setPaused` exists on the API and has
+  no menu entry.
 * **It does not act on more than one PIN.** Every call uses PIN 1. The API takes a
   PIN on every method, so a second identity within one wallet is possible; the
   CLI does not expose it, and `--identity` covers the two-party case instead.

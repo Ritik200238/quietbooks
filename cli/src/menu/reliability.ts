@@ -1,4 +1,4 @@
-// Menu: reliability counters and the threshold proof.
+// Menu: the reliability counters the contract keeps for this party.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,37 +25,12 @@ export const reliability = async (context: AppContext): Promise<void> => {
     ]),
   );
   out('');
-  out('  A threshold proof convinces a counterparty that this record clears a bar');
-  out('  without opening a single invoice behind it.');
-
-  if (!(await context.ask.yesNo('  Run a threshold proof now?', false))) {
-    return;
-  }
-
-  const minSettled = await context.ask.bigint('  Minimum invoices settled', {
-    min: 0n,
-    fallback: counters.settled,
-  });
-  const minOnTime = await context.ask.bigint('  Minimum settled on time', {
-    min: 0n,
-    fallback: counters.settledOnTime,
-  });
-  const maxDisputesLost = await context.ask.bigint('  Maximum disputes lost', {
-    min: 0n,
-    fallback: counters.disputesLost,
-  });
-
+  out('  They are counts, never amounts, and they carry no link back to any');
+  out('  individual invoice. Anyone can read them for any party key.');
   out('');
-  out('  Proving and submitting. The circuit asserts against the ledger\'s own');
-  out('  counters, so a threshold this record does not meet fails here rather than');
-  out('  producing a proof of something untrue.');
-
-  await context.api.proveReliability({ minSettled, minOnTime, maxDisputesLost });
-
-  out('');
-  out('  Proof accepted on chain: this wallet has settled at least');
-  out(
-    `  ${minSettled.toString()} invoices, ${minOnTime.toString()} of them on time, ` +
-      `losing at most ${maxDisputesLost.toString()} disputes.`,
-  );
+  out('  A circuit that proves a threshold over these -- "at least N settled, at');
+  out('  least M on time" -- without disclosing the counts is Wave 2 work. Every');
+  out('  entry point costs a verifier key in the deploy transaction, and a deploy');
+  out('  has to fit inside one block. The record is being kept now so that proof');
+  out('  has something to run against.');
 };

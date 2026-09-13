@@ -61,6 +61,7 @@ import {
 } from './common-types.js';
 
 export * from './common-types.js';
+export * from './store-password.js';
 
 /** Options every write shares. */
 export type CallOptions = {
@@ -573,33 +574,6 @@ export class QuietBooksAPI {
   }
 
   // -------------------------------------------------------------------------
-  // Reliability
-  // -------------------------------------------------------------------------
-
-  /**
-   * Prove a settlement record clears a threshold without opening any invoice.
-   *
-   * The counters come from the ledger, not from the prover, which is the whole
-   * difference between this and a claim on a website.
-   */
-  async proveReliability(
-    thresholds: { minSettled: bigint; minOnTime: bigint; maxDisputesLost: bigint },
-    options: CallOptions = {},
-  ): Promise<void> {
-    const pin = options.pin ?? DEFAULT_PIN;
-    try {
-      await this.deployedContract.callTx.proveReliability(
-        pin,
-        thresholds.minSettled,
-        thresholds.minOnTime,
-        thresholds.maxDisputesLost,
-      );
-    } catch (error) {
-      failed('proveReliability', error);
-    }
-  }
-
-  // -------------------------------------------------------------------------
   // Administration
   // -------------------------------------------------------------------------
 
@@ -608,14 +582,6 @@ export class QuietBooksAPI {
       await this.deployedContract.callTx.setPaused(value);
     } catch (error) {
       failed('setPaused', error);
-    }
-  }
-
-  async rotateAdmin(newAdmin: Uint8Array): Promise<void> {
-    try {
-      await this.deployedContract.callTx.rotateAdmin(newAdmin);
-    } catch (error) {
-      failed('rotateAdmin', error);
     }
   }
 

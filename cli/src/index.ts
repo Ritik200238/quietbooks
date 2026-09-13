@@ -32,6 +32,8 @@ import type { TestEnvironment } from '@midnight-ntwrk/testkit-js';
 import type { Logger } from 'pino';
 
 import {
+  assertStorePassword,
+  DEFAULT_STORE_PASSWORD,
   QuietBooksAPI,
   quietBooksPrivateStateKey,
   type PrivateStateId,
@@ -323,6 +325,12 @@ export const run = async (config: Config, testEnv: TestEnvironment, logger: Logg
       }
     }
 
+    const supplied = process.env.QUIETBOOKS_STORE_PASSWORD;
+    const storePassword =
+      supplied === undefined
+        ? DEFAULT_STORE_PASSWORD
+        : assertStorePassword(supplied, 'QUIETBOOKS_STORE_PASSWORD');
+
     const zkConfigProvider = new NodeZkConfigProvider<QuietBooksCircuitKeys>(config.zkConfigPath);
     providers = {
       privateStateProvider: levelPrivateStateProvider<PrivateStateId, QuietBooksPrivateState>({
@@ -330,8 +338,10 @@ export const run = async (config: Config, testEnv: TestEnvironment, logger: Logg
         signingKeyStoreName: `${config.privateStateStoreName}-signing-keys`,
         // Not a secret: it encrypts a store that already sits on the operator's
         // own disk, under their own account. It is configurable so that a
-        // deployment which does want a passphrase can supply one.
-        privateStoragePasswordProvider: () => process.env.QUIETBOOKS_STORE_PASSWORD ?? 'quietbooks-cli',
+        // deployment which does want a passphrase can supply one, and checked
+        // here because the store itself only checks on its first write -- which
+        // for a deploy is after the contract is already on chain.
+        privateStoragePasswordProvider: () => storePassword,
         accountId: seed,
       }),
       publicDataProvider: indexerPublicDataProvider(environment.indexer, environment.indexerWS),
