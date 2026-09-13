@@ -260,6 +260,32 @@ submitted, because a transaction that exceeds one is refused by the node with a
 message that names neither the limit nor the margin. See **[Why twelve entry
 points](#why-twelve-entry-points)**.
 
+### The web interface
+
+```bash
+npm run dev --workspace @quietbooks/ui
+```
+
+It needs a Midnight Lace wallet in the browser to balance and submit, a proof
+server for every write, and an indexer to read. Unset, it uses the connected
+wallet's own endpoints, which is the right default for TestNet; `ui/.env.example`
+documents every variable and [`ui/README.md`](./ui/README.md) covers the
+interface itself.
+
+Verified here: it builds, serves and renders its connect screen with no console
+errors. A wallet-connected run needs Lace on TestNet, which is not something the
+end-to-end harness can stand in for — the harness drives the contract through a
+headless wallet against the local network instead.
+
+### The CLI
+
+```bash
+npm run dev --workspace @quietbooks/cli
+```
+
+Same contract, same API, no browser or extension. [`cli/README.md`](./cli/README.md)
+lists what it does and, as usefully, what it does not.
+
 ---
 
 ## Why twelve entry points
