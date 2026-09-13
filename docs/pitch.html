@@ -400,8 +400,8 @@
     <div class="title-meta">
       <span><b>Contract</b> Compact 0.23</span>
       <span><b>Entry points</b> 12, compiling</span>
-      <span><b>Tests</b> 186 passing</span>
-      <span><b>End to end</b> 16/16 on a live node</span>
+      <span><b>Tests</b> 189 passing</span>
+      <span><b>End to end</b> 20/20 on a live node</span>
       <span><b>Licence</b> Apache-2.0</span>
     </div>
   </section>
@@ -465,30 +465,32 @@
       <h2>The finding that shaped the product</h2>
     </div>
     <p class="lead">We set out to have the contract hold the money and hide the amount.
-      It cannot, and finding out why produced a better design.</p>
+      It cannot. Working out what it can do instead produced a better design, and cost us
+      one whole implementation on the way.</p>
     <div class="cols two">
       <div class="panel">
         <h3>Why custody publishes the amount</h3>
         <p><code>receiveShielded</code> requires its coin argument to be disclosed, and a
-          <code>ShieldedCoinInfo</code> carries a plaintext <code>value</code>. OpenZeppelin's
-          own <code>ShieldedTreasury</code> states it plainly in its header:
+          contract that <em>holds</em> a coin publishes what it holds:
+          <code>ContractState.balance</code> is public by definition. OpenZeppelin's own
+          <code>ShieldedTreasury</code> states it in its header:
           <em>&ldquo;this treasury&rsquo;s holdings are public.&rdquo;</em></p>
-        <p>There is also no standard-library circuit that derives a Zswap note commitment
-          from coin data, so a contract cannot re-derive one in-circuit and bind it to a
-          private amount.</p>
       </div>
       <div class="panel">
-        <h3>What works instead</h3>
-        <p><code>claimZswapCoinReceive(note)</code> makes the ledger refuse a transaction
-          unless a specific Zswap output is present in it, using only a 32-byte commitment.
-          That commitment reveals neither value nor recipient.</p>
-        <p>So settlement happens peer to peer, where Zswap hides the amount, and the
-          contract binds that transfer to the invoice atomically.</p>
+        <h3>Routing without holding</h3>
+        <p>A contract can pass a payment through without ever having custody.
+          <code>receiveShielded</code> followed by <code>sendImmediateShielded</code> in the
+          same call takes the buyer's coin and forwards it to the seller, so the contract's
+          balance changes by zero and Zswap hides the value on both legs.</p>
+        <p>The payment and the settlement record are then one transaction: either both land
+          or neither does.</p>
       </div>
     </div>
     <div class="callout">
-      <p>The chain learns that an invoice was settled by a real shielded output. It never
-        learns for how much. An auditor holding the opening can verify the amount exactly.</p>
+      <p>The circuit also proves the payment is the <strong>right</strong> one. It compares
+        the coin against the terms the payer has just proven open the chain's commitment, and
+        refuses anything but the exact total &mdash; so neither figure reaches public state
+        and a buyer cannot settle by underpaying.</p>
     </div>
   </section>
 
@@ -496,6 +498,40 @@
   <section class="slide">
     <div class="slide-head">
       <span class="num">04</span>
+      <h2>The version that passed every test and could never have worked</h2>
+    </div>
+    <p class="lead">Worth a slide, because it is the honest argument for running against a
+      real node instead of trusting a green test suite.</p>
+    <p>The first implementation took a 32-byte note commitment as an argument and called
+      <code>kernel.claimZswapCoinReceive</code> on it, binding an ordinary buyer-to-seller
+      transfer. Every circuit test passed. It could never have produced a valid transaction.</p>
+    <pre class="transcript">all contract-associated commitments must be claimed by exactly one
+instance of the same contract in the same segment.</pre>
+    <p>The ledger requires each contract-associated commitment to be claimed by the contract
+      that owns it, so a receive claim only ever accepts the commitment of an output addressed
+      to <strong>this</strong> contract. A payment addressed to the seller is not one, and the
+      node refuses the whole transaction as malformed.</p>
+    <div class="cols two">
+      <div class="panel">
+        <h3>Why the tests were silent</h3>
+        <p>In-process circuit tests drive the compiled contract through the runtime. They
+          never build a transaction, so no rule about how commitments may be claimed is ever
+          evaluated. The whole suite passed against a circuit the chain would always reject,
+          and went on passing for days.</p>
+      </div>
+      <div class="panel">
+        <h3>What caught it</h3>
+        <p>Running the ledger itself. The fix is the forwarder pattern on the previous slide,
+          and the end-to-end suite now settles an invoice with a real shielded payment against
+          a real node rather than asserting that it would.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section class="slide">
+    <div class="slide-head">
+      <span class="num">05</span>
       <h2>Three ways to settle, and what each one costs you</h2>
     </div>
     <div class="table-wrap">
@@ -513,7 +549,7 @@
             <td class="mono">settleWithNote</td>
             <td>Buyer</td>
             <td><span class="pill hidden-v">hidden</span></td>
-            <td>The ledger refuses the call unless the named Zswap output exists in the same transaction</td>
+            <td>The buyer's coin is received and forwarded to the seller in the same call, and the circuit refuses any coin that is not the exact invoiced total</td>
           </tr>
           <tr>
             <td class="mono">settleAttested</td>
@@ -537,7 +573,7 @@
   <!-- 6 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">05</span>
+      <span class="num">06</span>
       <h2>Selective audit, checked eight ways</h2>
     </div>
     <p>The seller grants one auditor specific fields of one invoice until a chosen date.
@@ -568,7 +604,7 @@
   <!-- 7 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">06</span>
+      <span class="num">07</span>
       <h2>A payment record the party cannot write themselves</h2>
     </div>
     <p class="lead">The contract keeps counts, and only counts, against each party key:
@@ -587,7 +623,7 @@
   <!-- 8 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">07</span>
+      <span class="num">08</span>
       <h2>Why twelve entry points, and how we knew</h2>
     </div>
     <p class="lead">A deploy carries one verifier key per entry point and has to fit inside
@@ -630,7 +666,7 @@
   <!-- 9 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">08</span>
+      <span class="num">09</span>
       <h2>Identity without <code>msg.sender</code></h2>
     </div>
     <div class="cols two">
@@ -654,29 +690,34 @@
   <!-- 10 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">09</span>
+      <span class="num">10</span>
       <h2>Evidence, not adjectives</h2>
     </div>
     <div class="figures">
       <div class="figure"><span class="n">12</span><span class="l">entry points compiling, with proving and verifying keys</span></div>
-      <div class="figure"><span class="n">186</span><span class="l">tests passing against the compiled contract</span></div>
-      <div class="figure"><span class="n">16/16</span><span class="l">end-to-end steps on a live node with real proofs</span></div>
+      <div class="figure"><span class="n">189</span><span class="l">tests passing against the compiled contract</span></div>
+      <div class="figure"><span class="n">20/20</span><span class="l">end-to-end steps on a live node with real proofs</span></div>
       <div class="figure"><span class="n">0.31.1</span><span class="l">Compact toolchain, pinned in CI</span></div>
     </div>
     <p>The end-to-end run deploys to a real Midnight node, then drives the whole business
       flow and checks every step against state read back through the indexer rather than
-      against the local result of the call:</p>
-    <pre class="transcript"><b>PASS</b>  deploy the contract with real ZK proofs          (23.1s)
+      against the local result of the call. Both privacy claims are asserted, in opposite
+      directions: the private path must not leave the amount readable, and the escrow path
+      must.</p>
+    <pre class="transcript"><b>PASS</b>  deploy the contract with real ZK proofs            (31.9s)
 <b>PASS</b>  indexer returns the deployed state
-<b>PASS</b>  issue an invoice                                 (97.3s)
+<b>PASS</b>  issue an invoice                                  (256.0s)
 <b>PASS</b>  the chain shows the invoice and hides its amount
-<b>PASS</b>  settle by attestation                            (41.2s)
-<b>PASS</b>  grant an auditor three fields                    (28.3s)
-<b>PASS</b>  the chain records the grant exactly as given
-<b>PASS</b>  revoke the audit grant                           (24.0s)
+<b>PASS</b>  the buyer pays the seller and settles in one tx    (216.8s)
+<b>PASS</b>  the chain shows the settlement and still hides the amount
+<b>PASS</b>  grant an auditor three fields                      (34.2s)
+<b>PASS</b>  revoke the audit grant                             (36.1s)
+<b>PASS</b>  the buyer funds escrow with a real shielded coin   (192.2s)
+<b>PASS</b>  the contract holds the coin, and its value is public
+<b>PASS</b>  the buyer releases the escrow to the seller        (237.8s)
 <b>PASS</b>  a second party can join the same deployment
 
-16/16 steps passed</pre>
+20/20 steps passed</pre>
     <div class="cols two">
       <div class="panel">
         <h3>A bug the tests nearly missed</h3>
@@ -699,12 +740,12 @@
   <!-- 11 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">10</span>
+      <span class="num">11</span>
       <h2>What is not built</h2>
     </div>
     <p class="lead">A roadmap that lists only wins is not a roadmap.</p>
     <ul class="plain">
-      <li><b>Wallet-side note binding.</b> The contract half of <code>settleWithNote</code> is implemented and tested. Wiring it to the wallet's coin-commitment tracking, so the payment and the contract call ride in one transaction, is not finished; the end-to-end run settles by attestation, and escrow is the path that moves real shielded value today.</li>
+      <li><b>Paying a stranger.</b> Building the output to the seller needs their Zswap <em>encryption</em> key, not the party key the invoice carries, and that key has to travel out of band. Settling to a key your wallet already holds works today; a two-party flow needs the invoice to carry a payment address.</li>
       <li><b>The reliability threshold proof.</b> Written and tested, deferred to Wave 2 for the block-budget reason above. The counters it proves over are already being kept.</li>
       <li><b>Administrator rotation.</b> Removed for the same reason. The administrator is fixed at deploy; the emergency stop still works.</li>
       <li><b>Local proof server.</b> Every user needs one running. True of every Midnight DApp today; in-browser proving is the fix when it reaches the wallet.</li>
@@ -715,7 +756,7 @@
   <!-- 12 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">11</span>
+      <span class="num">12</span>
       <h2>Built on the ecosystem, and says so</h2>
     </div>
     <div class="cols">
@@ -746,7 +787,7 @@
   <!-- 13 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">12</span>
+      <span class="num">13</span>
       <h2>Who this is for</h2>
     </div>
     <div class="cols two">
