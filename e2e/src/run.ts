@@ -19,6 +19,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pino from 'pino';
+import * as Cause from 'effect/Cause';
 
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
@@ -105,10 +106,65 @@ const step = async <T>(name: string, body: () => Promise<T>): Promise<T> => {
     logger.info(`PASS  ${name}  (${detail})`);
     return value;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    results.push({ name, ok: false, detail: message });
-    logger.error(`FAIL  ${name}  ${message}`);
+    // Wallet and ledger failures arrive wrapped: the outer message is often
+    // just "Transaction submission error" while the reason sits several
+    // `cause` levels down. Unwrapping here is the difference between a report
+    // that says something failed and one that says why.
+    const detail = describe(error);
+    results.push({ name, ok: false, detail });
+    logger.error(`FAIL  ${name}\n${detail}`);
     throw error;
+  }
+};
+
+const describe = (error: unknown, depth = 0): string => {
+  if (depth > 8) return '...';
+  if (!(error instanceof Error)) return String(error);
+
+  const parts: string[] = [`${error.name}: ${error.message}`];
+
+  // Some SDK errors carry structured detail on their own fields rather than in
+  // the message, so every own key is worth printing once. Effect's tagged
+  // errors define their fields non-enumerably, so ask for all own property
+  // names rather than only the enumerable ones.
+  const skip = new Set(['name', 'message', 'stack', 'cause', 'txData']);
+  for (const key of Object.getOwnPropertyNames(error)) {
+    if (skip.has(key)) continue;
+    skip.add(key);
+    parts.push(`    ${key}: ${safeJson((error as unknown as Record<string, unknown>)[key])}`);
+  }
+
+  // The wallet runs on Effect. When an Effect fails, the JS error that reaches
+  // the caller is a FiberFailure whose message is only the outermost tag --
+  // "Transaction submission error" and nothing more. The reason the node
+  // actually gave sits in the Cause hanging off a symbol-keyed property, so
+  // without this the report says that something failed and never says why.
+  const fiberCause = getFiberCause(error);
+  const cause =
+    fiberCause !== undefined
+      ? Cause.squash(fiberCause as Cause.Cause<unknown>)
+      : (error as { cause?: unknown }).cause;
+
+  if (cause !== undefined && cause !== null && cause !== error) {
+    parts.push(`  caused by: ${describe(cause, depth + 1)}`);
+  }
+  return parts.join('\n');
+};
+
+/** Read the Effect `Cause` a FiberFailure carries on a symbol-keyed property. */
+const getFiberCause = (error: Error): unknown => {
+  for (const symbol of Object.getOwnPropertySymbols(error)) {
+    const value = (error as unknown as Record<symbol, unknown>)[symbol];
+    if (Cause.isCause(value)) return value;
+  }
+  return undefined;
+};
+
+const safeJson = (value: unknown): string => {
+  try {
+    return JSON.stringify(value, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))?.slice(0, 400) ?? String(value);
+  } catch {
+    return String(value);
   }
 };
 
