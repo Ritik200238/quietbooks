@@ -67,6 +67,7 @@ import {
 
 export * from './common-types.js';
 export * from './store-password.js';
+export * from './network.js';
 
 /** Options every write shares. */
 export type CallOptions = {

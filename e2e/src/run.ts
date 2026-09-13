@@ -58,7 +58,7 @@ import {
 
 import { encodeCoinPublicKey } from '@midnight-ntwrk/compact-runtime';
 
-import { QuietBooksAPI } from '@quietbooks/api';
+import { configureNetwork, QuietBooksAPI } from '@quietbooks/api';
 
 import { buildWallet, waitForSync, waitForFunds, registerForDust, E2EWalletProvider } from './wallet.js';
 
@@ -183,7 +183,11 @@ const assert = (condition: boolean, message: string): void => {
 // ---------------------------------------------------------------------------
 
 const main = async (): Promise<void> => {
+  // Both copies. This module calls midnight-js directly and also drives
+  // @quietbooks/api, and npm gives each workspace its own instance of the
+  // network-id module, so setting one leaves the other unconfigured.
   setNetworkId(NETWORK_ID);
+  configureNetwork(NETWORK_ID);
   logger.info(`network=${NETWORK_ID} indexer=${ENV.indexer} proofServer=${ENV.proofServer}`);
   logger.info(`zk artifacts: ${ZK_CONFIG_PATH}`);
 
