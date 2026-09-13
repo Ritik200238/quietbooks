@@ -31,6 +31,9 @@ import {
   type TestEnvironment,
 } from '@midnight-ntwrk/testkit-js';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
+// Setting this module's own copy is not enough: @quietbooks/api resolves a
+// separate instance of the same package, and a circuit call reads that one.
+import { configureNetwork } from '@quietbooks/api';
 import type { Logger } from 'pino';
 
 import { storeNameFor } from './session.js';
@@ -78,6 +81,12 @@ const logPathFor = (label: string): string =>
 
 export class StandaloneConfig implements Config {
   getEnvironment(logger: Logger): TestEnvironment {
+    // Stated rather than inherited. The testkit sets the id on whichever copy it
+    // resolved, which is not necessarily either of the copies this process
+    // actually reads from, and an unset id fails at the first circuit call with
+    // a message about configuration rather than about the network.
+    setNetworkId('undeployed');
+    configureNetwork('undeployed');
     return getTestEnvironment(logger) as TestEnvironment;
   }
   privateStateStoreName = STORE_NAME;
@@ -91,6 +100,7 @@ export class StandaloneConfig implements Config {
 export class PreviewRemoteConfig implements Config {
   getEnvironment(logger: Logger): TestEnvironment {
     setNetworkId('preview');
+    configureNetwork('preview');
     return new PreviewTestEnvironment(logger);
   }
   privateStateStoreName = STORE_NAME;
@@ -104,6 +114,7 @@ export class PreviewRemoteConfig implements Config {
 export class PreprodRemoteConfig implements Config {
   getEnvironment(logger: Logger): TestEnvironment {
     setNetworkId('preprod');
+    configureNetwork('preprod');
     return new PreprodTestEnvironment(logger);
   }
   privateStateStoreName = STORE_NAME;
