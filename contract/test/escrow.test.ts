@@ -9,7 +9,6 @@ import {
   advance,
   ARBITER_PIN,
   ARBITER_SECRET,
-  bytes32,
   BUYER_PIN,
   BUYER_SECRET,
   coin,
@@ -30,6 +29,7 @@ import {
 } from './harness.js';
 
 import { DisputeOutcome, InvoiceStatus, SettlementMode } from '../build/contract/index.js';
+import { payableTotal } from '../src/invoice.js';
 import { toHex } from '../src/util.js';
 
 /** Payout addresses. Nothing here asserts on them beyond the call succeeding. */
@@ -38,7 +38,6 @@ const BUYER_PAYOUT = pk(0xb2);
 
 const ESCROW_VALUE = 4_550_000n;
 const DEADLINE = T0 + 14n * DAY;
-const NOTE = bytes32(0x9e);
 
 /** JSON with the byte arrays and bigints of a ledger record made readable. */
 const dump = (value: unknown): string =>
@@ -220,7 +219,8 @@ describe('funding an escrow', () => {
         ctx(open.d, buyerState),
         open.invoiceId,
         open.buyer.pin,
-        NOTE,
+        coin(payableTotal(open.prepared.terms)),
+        SELLER_PAYOUT,
         T0 + DAY,
       ),
     );

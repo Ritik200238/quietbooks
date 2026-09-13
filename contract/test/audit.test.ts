@@ -40,7 +40,7 @@ import {
 
 import { pureCircuits } from '../build/contract/index.js';
 import { grantCovers } from '../src/audit.js';
-import { allScopes, noScopes, scopeNames, scopesFrom } from '../src/invoice.js';
+import { allScopes, noScopes, payableTotal, scopeNames, scopesFrom } from '../src/invoice.js';
 import { toHex } from '../src/util.js';
 
 // The seller hands the symmetric audit key to the auditor out of band; only its
@@ -50,7 +50,9 @@ const AUDIT_KEY = bytes32(0xa0);
 const OTHER_AUDIT_KEY = bytes32(0xb1);
 
 const EXPIRY = T0 + 30n * DAY;
-const NOTE = bytes32(0x9e);
+
+/** Where the buyer sends the payment. Nothing here asserts on it. */
+const SELLER_PAYOUT = pk(0x77);
 
 /** A deployment carrying one open invoice, and the parties to it. */
 const anInvoice = async () => {
@@ -110,7 +112,8 @@ const settle = (d: Deployed, issued: IssuedInvoice, buyer: Actor, at: bigint): D
       ctx(d, stageFor(share(buyer.state, issued.stored), issued.prepared), at),
       issued.invoiceId,
       buyer.pin,
-      NOTE,
+      coin(payableTotal(issued.prepared.terms)),
+      SELLER_PAYOUT,
       at,
     ),
   );
