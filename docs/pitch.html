@@ -745,7 +745,8 @@ instance of the same contract in the same segment.</pre>
     </div>
     <p class="lead">A roadmap that lists only wins is not a roadmap.</p>
     <ul class="plain">
-      <li><b>Paying a stranger.</b> Building the output to the seller needs their Zswap <em>encryption</em> key, not the party key the invoice carries, and that key has to travel out of band. Settling to a key your wallet already holds works today; a two-party flow needs the invoice to carry a payment address.</li>
+      <li><b>The currency on an invoice is a label, not a token.</b> The circuit checks the coin's value against the invoiced total and never relates the invoice's currency to the coin's token type, so "USD 1,250.00" settles in the native shielded token. Nothing is lost and the audit envelope still opens; the denomination is the parties' shared assumption rather than something the chain enforces.</li>
+      <li><b>Paying a seller you have never paid needs one thing out of band.</b> A shielded output is encrypted to its recipient, so the payer needs the seller's Zswap <em>encryption</em> key as well as the coin public key that names them. The API takes it; the invoice does not yet carry it.</li>
       <li><b>The reliability threshold proof.</b> Written and tested, deferred to Wave 2 for the block-budget reason above. The counters it proves over are already being kept.</li>
       <li><b>Administrator rotation.</b> Removed for the same reason. The administrator is fixed at deploy; the emergency stop still works.</li>
       <li><b>Local proof server.</b> Every user needs one running. True of every Midnight DApp today; in-browser proving is the fix when it reaches the wallet.</li>

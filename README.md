@@ -407,11 +407,19 @@ Reintroducing the bug fails seven tests.
 
 Stated plainly, because a roadmap that only lists wins is not a roadmap.
 
-- The buyer's wallet has to produce a Zswap note commitment for
-  `settleWithNote`. The contract's side of that binding is implemented and
-  tested in process; wiring it to the wallet's coin-commitment tracking is not
-  finished, so the end-to-end run settles by attestation. Escrow is the path that
-  moves real shielded value through the contract today.
+- **The currency on an invoice is a label, not a token.** The contract checks
+  that the coin's *value* equals the invoiced total and never relates
+  `terms.currency` to the coin's token type, and both interfaces settle in the
+  native shielded token. So an invoice reading "USD 1,250.00" settles as
+  1,250,000,000 units of NIGHT. Nothing is lost or misdirected, and the audit
+  envelope still opens correctly, but the denomination is the parties' shared
+  assumption rather than something the chain enforces. Binding the currency to a
+  token type is a contract change, not an interface one.
+- **Paying a seller you have never paid before needs one thing out of band.**
+  Building a shielded output means encrypting the coin to its recipient, so the
+  payer needs the seller's Zswap *encryption* key as well as the coin public key
+  that names them. The API takes it; the invoice does not carry it. Until an
+  invoice carries a payment address, the seller has to send both.
 - The threshold proof over the reliability counters is written and was deployed
   in an earlier build, but does not fit in the current deploy alongside escrow
   and disputes. The counters are still kept. See **[Why twelve entry
