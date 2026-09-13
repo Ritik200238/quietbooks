@@ -108,19 +108,24 @@ A validator reports; it never throws on a failed check.
 
 ---
 
-## Reliability without disclosure
+## The reliability record
 
 The contract keeps counts, and only counts, against each party key: settled,
-settled on time, cancelled, disputes opened, disputes lost. No amounts.
+settled on time, cancelled, disputes opened, disputes lost. No amounts, and no
+link from a count back to an individual invoice.
 
-`proveReliability(minSettled, minOnTime, maxDisputesLost)` returns a single
-boolean. A supplier can show a prospective customer that they have settled at
-least twenty invoices, at least eighteen of them on time, and lost no disputes,
-and the customer learns nothing else. Not the counterparties, not the amounts,
-not which invoices are being counted.
+The counters are written by the contract as invoices move, never supplied by the
+party they describe. That is the difference between a payment record and a claim
+on a website. They are public ledger state, so anyone can read them for any
+party key.
 
-The counters are read from ledger state, not supplied by the prover. That is the
-difference between this and a claim on a website.
+A circuit that proves a threshold over them — "at least twenty settled, at least
+eighteen on time, no disputes lost" — while disclosing none of the counts is
+built but not deployed, and is Wave 2 work. Every entry point costs a verifier
+key in the deploy transaction, a deploy has to fit inside one block's write
+budget, and this contract is at that budget. See **[Why twelve entry
+points](#why-twelve-entry-points)**. The record is accumulated now so the proof
+has something to run against later.
 
 ---
 
@@ -226,6 +231,108 @@ This deploys the contract with real ZK proofs and runs the whole business flow
 against the live node and indexer, asserting every step against state read back
 through the indexer rather than against the local result of the call.
 
+Sixteen steps, all passing as of the last run:
+
+```
+PASS  build wallet from the genesis seed
+PASS  wallet syncs with the chain
+PASS  wallet holds NIGHT
+PASS  NIGHT is registered and DUST is spendable
+PASS  deploy the contract with real ZK proofs          (23.1s)
+PASS  indexer returns the deployed state
+PASS  issue an invoice                                 (97.3s)
+PASS  the chain shows the invoice and hides its amount
+PASS  settle by attestation                            (41.2s)
+PASS  the chain shows the settlement
+PASS  grant an auditor three fields                    (28.3s)
+PASS  the chain records the grant exactly as given
+PASS  the chain credits the seller a settlement
+PASS  revoke the audit grant                           (24.0s)
+PASS  the chain shows the grant revoked
+PASS  a second party can join the same deployment
+
+16/16 steps passed
+```
+
+The times are real proving times on a laptop, against the pinned proof server.
+Each transaction also prints its cost against every block limit before it is
+submitted, because a transaction that exceeds one is refused by the node with a
+message that names neither the limit nor the margin. See **[Why twelve entry
+points](#why-twelve-entry-points)**.
+
+---
+
+## Why twelve entry points
+
+A Midnight deploy transaction carries one verifier key for every entry point —
+every top-level `export circuit` that touches the public ledger. Those keys are
+the bulk of the transaction, and the transaction has to fit inside one block.
+
+The ledger's limits are per block and multi-dimensional
+(`reference/midnight-docs/api-reference/overview/usage-limits.mdx`): 200,000
+bytes of blockspace, **50,000 bytes of persistent writes**, 1,000,000 bytes
+churned, and a second each of read and compute time. For a contract deploy the
+binding dimension is persistent writes, because that is where the verifier keys
+land. A transaction is allowed less than a whole block, and how much less is not
+documented, so we measured it rather than guessed.
+
+`e2e/probe/` generates a contract with N entry points, compiles it, and deploys
+it against the local node, reporting the cost against every limit alongside the
+outcome. The circuits it generates are deliberately different from one another:
+N copies of one circuit produce N identical verifier keys, which the transaction
+encoding compresses away — eighteen identical entry points serialize to 6 KB
+where eighteen distinct ones serialize to 41 KB.
+
+| Contract | Persistent writes | Share of the block limit | Node |
+|---|---|---|---|
+| `example-counter`, 1 entry point | 7,250 | 14.5% | accepted |
+| probe, 12 entry points | 30,700 | 61.4% | accepted |
+| QuietBooks, 12 entry points | 30,797 | 61.6% | accepted |
+| QuietBooks, 14 entry points | 35,858 | 71.7% | **rejected** |
+| probe, 16 entry points | 40,284 | 80.6% | **rejected** |
+| QuietBooks, 18 entry points | 44,964 | 89.9% | **rejected** |
+
+So a single transaction gets roughly two thirds of a block, not all of it —
+consistent with Substrate's own `maxExtrinsic`, which this node reports as 65%
+of `maxBlock`. The node's answer either way is the same opaque line:
+
+```
+1010: Invalid Transaction: Transaction would exhaust the block limits
+```
+
+It names neither the dimension nor the margin, and the wallet's Effect runtime
+buries even that behind `SubmissionError: Transaction submission error`. Two
+pieces of the harness exist because of this. `e2e/src/wallet.ts` measures every
+transaction against every limit before submitting and refuses locally with the
+dimension named — it recovers the limits by feeding `normalizeFullness` a unit
+vector per dimension until it throws, rather than hardcoding five numbers that
+governance can change. `e2e/src/run.ts` unwraps Effect's `Cause` so the node's
+real answer reaches the report.
+
+Six circuits were removed to fit. Four were entry points no application code
+ever called:
+
+| Removed | Why it was safe |
+|---|---|
+| `derivePartyKey`, `deriveAdminKey` | Thin impure wrappers that read `instanceSalt` and called the pure `derivePartyKeyWith` / `deriveAdminKeyWith`. Callers read the salt from ledger state and call the pure form, which costs nothing on chain |
+| `auditGrantCovers` | Duplicated the grant rule that the envelope validator already applies off chain, where opening actually happens. The rule now has one implementation, `grantCovers` in `contract/src/audit.ts` |
+| `readReliabilityOf` | Read counters that are public ledger state and already served by the indexer |
+
+Two were real features, deferred rather than deleted:
+
+| Deferred | Consequence |
+|---|---|
+| `proveReliability` | The counters are still written by the contract and readable by anyone; the threshold proof over them is Wave 2 |
+| `rotateAdmin` | The administrator is fixed at deploy. `setPaused` still works, so the emergency stop is intact |
+
+Both are recorded in [`DECISIONS.md`](./DECISIONS.md) with the measurement that
+forced the choice. The alternative — splitting escrow and disputes into a second
+contract — was rejected because Midnight has no cross-contract calls
+(`reference/midnight-docs/docs/concepts/how-midnight-works/building-blocks.mdx`),
+so releasing an escrow and marking its invoice settled would stop being one
+atomic transaction. Losing atomicity over money is a worse trade than deferring
+a proof.
+
 ---
 
 ## Testing
@@ -235,7 +342,7 @@ through the indexer rather than against the local result of the call.
 | `derivation.test.ts` | The off-chain helpers produce byte-identical results to the compiled circuit |
 | `lifecycle.test.ts` | Issue, settle, cancel, and every authorisation rule |
 | `escrow.test.ts` | Funding, release, refund deadlines, disputes, arbitration |
-| `audit.test.ts` | Grants, scope coverage, expiry, revocation, reliability, admin |
+| `audit.test.ts` | Grants, scope coverage, expiry, revocation, the reliability record, admin |
 | `audit-envelope.test.ts` | Envelope crypto and all eight validator checks |
 
 One test is worth calling out. An earlier version of the derivation suite
@@ -253,8 +360,15 @@ Stated plainly, because a roadmap that only lists wins is not a roadmap.
 
 - The buyer's wallet has to produce a Zswap note commitment for
   `settleWithNote`. The contract's side of that binding is implemented and
-  tested; wiring it to the wallet's coin-commitment tracking is not finished, so
-  the end-to-end run currently exercises `settleAttested`.
+  tested in process; wiring it to the wallet's coin-commitment tracking is not
+  finished, so the end-to-end run settles by attestation. Escrow is the path that
+  moves real shielded value through the contract today.
+- The threshold proof over the reliability counters is written and was deployed
+  in an earlier build, but does not fit in the current deploy alongside escrow
+  and disputes. The counters are still kept. See **[Why twelve entry
+  points](#why-twelve-entry-points)**.
+- The administrator is fixed at deploy. `rotateAdmin` was removed for the same
+  reason; `setPaused` remains, so the emergency stop works.
 - Every user needs a locally running proof server. That is true of every Midnight
   DApp today, and in-browser proving is the fix when it lands in the wallet.
 - Reliability counters are per party key, so they reset on PIN rotation. An
