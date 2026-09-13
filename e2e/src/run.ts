@@ -576,11 +576,23 @@ const main = async (): Promise<void> => {
     });
 
     // -----------------------------------------------------------------------
-    await step('a second party can join the same deployment', async () => {
+    await step('a party who has never seen this deployment can join it', async () => {
+      // The point of this step is the SECOND party, so it has to start the way a
+      // second party does: with nothing stored for this contract.
+      //
+      // An earlier version of this step reused the store this run had already
+      // written and passed for the wrong reason. midnight-js reads the private
+      // state by contract address and asserts it is defined, so a genuinely
+      // fresh wallet threw `No private state found at private state ID` and the
+      // only path that worked was the deployer rejoining their own deployment.
+      // Clearing it first is what makes this step mean what its name says.
+      await providers.privateStateProvider.remove('quietBooksPrivateState');
+
       const joined = await findDeployedContract(providers, {
         compiledContract: CompiledQuietBooksContract,
         contractAddress: address,
         privateStateId: 'quietBooksPrivateState',
+        initialPrivateState: emptyPrivateState(randomBytes32()),
       });
       assert(
         joined.deployTxData.public.contractAddress === address,
