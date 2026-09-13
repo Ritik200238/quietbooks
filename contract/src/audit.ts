@@ -446,6 +446,39 @@ const plaintextMismatch = async (
  * one invoice open the envelope for another, which the chain's per-invoice grant
  * would then have no way to prevent.
  */
+/**
+ * Is this grant usable right now, for exactly these fields?
+ *
+ * The contract enforces what may be *granted*; nothing on chain enforces what a
+ * reader may *open*, because opening happens off chain against an encrypted
+ * envelope. This is that rule, and it is deliberately the only copy of it: an
+ * earlier version also lived in the contract as an entry point, which cost a
+ * verifier key in every deploy transaction, was called by nothing, and gave two
+ * implementations a chance to drift apart.
+ *
+ * The clauses mirror the chain's own semantics:
+ *
+ *  - Expiry is exclusive. The contract's guard is `blockTime < expiresAt`, so a
+ *    grant read exactly at its expiry has already lapsed.
+ *  - A request for no fields is refused rather than vacuously covered. Under
+ *    ordinary subset semantics the empty set is covered by anything, which is
+ *    exactly the wrong answer to hand a validator: a caller asking to see
+ *    nothing has almost certainly built its request wrongly, and a `true` here
+ *    would let a malformed envelope look authorised.
+ */
+export const grantCovers = (
+  grant: AuditGrantView | undefined,
+  requested: readonly boolean[],
+  now: bigint,
+): boolean => {
+  if (grant === undefined) return false;
+  if (grant.revoked) return false;
+  if (requested.length !== SCOPE_COUNT || grant.scopes.length !== SCOPE_COUNT) return false;
+  if (!requested.some((on) => on)) return false;
+  if (now >= grant.expiresAt) return false;
+  return requested.every((on, index) => !on || grant.scopes[index]);
+};
+
 export const deriveAuditKey = (): Uint8Array => randomBytes32();
 
 /** The value the grant pins on chain. The key itself never goes there. */

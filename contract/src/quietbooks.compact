@@ -168,8 +168,15 @@ export struct AuditGrant {
   revoked: Boolean
 }
 
-// Counts only. No amounts, ever. These back the reliability proof, which lets a
-// party show a counterparty "I settle on time" without opening a single invoice.
+// Counts only. No amounts, ever.
+//
+// The settlement, cancellation and dispute paths keep these up to date, and a
+// reader takes them from public ledger state. The circuit that proved a
+// threshold over them -- "I have settled at least N, at least M on time" --
+// without disclosing the counts is Wave 2 work: every entry point costs a
+// verifier key in the deploy transaction, and a deploy has to fit inside one
+// block's write budget. The record is accumulated now so that proof has
+// something to run against later.
 export struct Reliability {
   settled: Uint<64>,
   settledOnTime: Uint<64>,
@@ -313,9 +320,12 @@ constructor(salt: Bytes<32>) {
 // Declared pure and taking the salt explicitly so that a wallet can derive the
 // same key off chain. The seller needs their own key to compute an invoice
 // identifier before any transaction exists, and a buyer needs to hand out a key
-// to be invoiced against; neither can call into a contract to get one. The
-// impure wrapper below is the convenience form for callers that already have a
-// deployment in hand.
+// to be invoiced against; neither can call into a contract to get one.
+//
+// There is deliberately no impure wrapper that reads `instanceSalt` and calls
+// this. It would be an entry point, and an entry point costs a verifier key in
+// every deploy transaction whether or not anyone ever submits it. Callers that
+// hold a deployment read the salt from ledger state and call this directly.
 export pure circuit derivePartyKeyWith(
   salt: Bytes<32>,
   secret: Bytes<32>,
@@ -329,22 +339,14 @@ export pure circuit derivePartyKeyWith(
   ]);
 }
 
+// The administrative identity. Not PIN-bound, so the role survives the admin
+// rotating their own party PIN.
 export pure circuit deriveAdminKeyWith(salt: Bytes<32>, secret: Bytes<32>): Bytes<32> {
   return persistentHash<Vector<3, Bytes<32>>>([
     tagAdmin(),
     salt,
     secret
   ]);
-}
-
-export circuit derivePartyKey(secret: Bytes<32>, pin: Uint<64>): Bytes<32> {
-  return derivePartyKeyWith(instanceSalt, secret, pin);
-}
-
-// The administrative identity. Not PIN-bound, so the role survives the admin
-// rotating their own party PIN.
-export circuit deriveAdminKey(secret: Bytes<32>): Bytes<32> {
-  return deriveAdminKeyWith(instanceSalt, secret);
 }
 
 // The caller's party key for a given PIN, from their own secret.
@@ -974,21 +976,6 @@ circuit anyScope(s: Vector<9, Boolean>): Boolean {
   return s[0] || s[1] || s[2] || s[3] || s[4] || s[5] || s[6] || s[7] || s[8];
 }
 
-// True when every slot requested is also granted. Written out rather than
-// folded so the failure is easy to read in a test and the constraint count is
-// obvious: nine implications, no loop.
-circuit scopesCover(granted: Vector<9, Boolean>, requested: Vector<9, Boolean>): Boolean {
-  return (!requested[0] || granted[0])
-      && (!requested[1] || granted[1])
-      && (!requested[2] || granted[2])
-      && (!requested[3] || granted[3])
-      && (!requested[4] || granted[4])
-      && (!requested[5] || granted[5])
-      && (!requested[6] || granted[6])
-      && (!requested[7] || granted[7])
-      && (!requested[8] || granted[8]);
-}
-
 // Revoke early. Works while paused: a seller who needs to withdraw an auditor's
 // access should never be blocked by an unrelated emergency stop.
 export circuit revokeAudit(invoiceId: Bytes<32>, sellerPin: Uint<64>): [] {
@@ -1012,73 +999,13 @@ export circuit revokeAudit(invoiceId: Bytes<32>, sellerPin: Uint<64>): [] {
   });
 }
 
-// Read-side helper for the validator: is this grant usable right now, for these
-// fields? Keeping the check on chain means a validator and a wallet cannot drift
-// apart on what "still valid" means.
-export circuit auditGrantCovers(
-  invoiceId: Bytes<32>,
-  requestedScopes: Vector<9, Boolean>
-): Boolean {
-  const id = disclose(invoiceId);
-  const requested = disclose(requestedScopes);
-
-  // An empty request is vacuously covered under ordinary subset semantics, and
-  // that is exactly the wrong answer to return to a validator. A caller asking
-  // "may I see nothing" has almost certainly built its request vector wrongly,
-  // and a true here would let a malformed envelope look authorised. Answering
-  // false makes the mistake visible at the point it happens.
-  if (!anyScope(requested)) { return false; }
-
-  if (!auditGrants.member(id)) { return false; }
-  const g = auditGrants.lookup(id);
-  if (g.revoked) { return false; }
-  if (!blockTimeLt(g.expiresAt)) { return false; }
-  return scopesCover(g.scopes, requested);
-}
-
 // ---------------------------------------------------------------------------
 // Reliability proof
 // ---------------------------------------------------------------------------
 
-// Prove a settlement record clears a threshold, without opening a single
-// invoice. A supplier shows a prospective customer "at least N invoices settled,
-// at least M of them on time, no more than D disputes lost" and the customer
-// learns nothing else .. not who the counterparties were, not the amounts, not
-// even which invoices are being counted.
-//
-// The counters are read from the ledger rather than supplied by the prover,
-// which is what separates this from a self-reported claim.
-export circuit proveReliability(
-  partyPin: Uint<64>,
-  minSettled: Uint<64>,
-  minOnTime: Uint<64>,
-  maxDisputesLost: Uint<64>
-): Boolean {
-  const key = disclose(callerKey(partyPin));
-  const r = readReliability(key);
-  return r.settled >= disclose(minSettled)
-      && r.settledOnTime >= disclose(minOnTime)
-      && r.disputesLost <= disclose(maxDisputesLost);
-}
-
-// Read a party's counters. Public by construction .. they are counts held in
-// public ledger state .. and exposed as a circuit so a caller gets a consistent
-// snapshot including the zero case for a party with no history.
-export circuit readReliabilityOf(partyKey: Bytes<32>): Reliability {
-  return readReliability(disclose(partyKey));
-}
-
 // ---------------------------------------------------------------------------
 // Administration
 // ---------------------------------------------------------------------------
-
-// Hand the role to a key the next admin already controls. No private key ever
-// moves between the two parties.
-export circuit rotateAdmin(newAdmin: Bytes<32>): [] {
-  assertAdmin();
-  assert(disclose(newAdmin) != default<Bytes<32>>, "quietbooks: new admin must be set");
-  admin = disclose(newAdmin);
-}
 
 export circuit setPaused(value: Boolean): [] {
   assertAdmin();
