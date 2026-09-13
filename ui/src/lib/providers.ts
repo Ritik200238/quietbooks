@@ -44,12 +44,23 @@ export type Endpoints = {
   readonly zkConfigUri: string;
 };
 
-export const networkId = (): string => import.meta.env.VITE_NETWORK_ID ?? 'testnet';
-
 const setting = (value: string | undefined): string | undefined => {
   const trimmed = value?.trim();
   return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
 };
+
+/**
+ * Which network this build targets.
+ *
+ * The default is the local one. `testnet` was the previous default and its
+ * endpoints no longer resolve -- the network was retired and replaced by
+ * `preview` and `preprod` (`docs/guides/networks-and-environments.mdx`), so a
+ * build left unconfigured pointed at nothing. Defaulting to `undeployed`
+ * instead means an unconfigured build targets the network this repository can
+ * actually bring up, and anyone aiming at a public network is setting the
+ * variable deliberately.
+ */
+export const networkId = (): string => setting(import.meta.env.VITE_NETWORK_ID) ?? 'undeployed';
 
 export type BuiltProviders = {
   readonly providers: QuietBooksProviders;
