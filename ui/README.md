@@ -23,12 +23,14 @@ writes an amount to public state.
 deployment, including the ones this wallet cannot open, with the amount column locked. That
 is not a permission failure; it is what the ledger actually contains from the outside.
 
-**Settlement in the private mode is peer to peer.** Midnight's `receiveShielded` requires the
-coin it takes to be disclosed, so a contract that holds your money knows and publishes how
-much it is. QuietBooks therefore settles privately by an ordinary shielded transfer, which
-Zswap hides, and binds that transfer to the invoice through its Zswap note commitment. The
-chain learns that the invoice was settled by a real shielded output. It never learns the
-amount.
+**Settlement in the private mode routes through the contract without being held by it.**
+Midnight's `receiveShielded` requires the coin it takes to be disclosed, and a contract that
+*holds* a coin publishes what it holds. So the contract does not hold it: it receives the coin
+and forwards it to the seller in the same call, leaving its balance unchanged. Zswap hides the
+value on both legs. The payment and the settlement record are one transaction, so either both
+land or neither does, and the chain learns that the invoice was settled without learning the
+amount. The circuit also checks the coin against the terms you hold and refuses anything but
+the exact total.
 
 **Escrow is the honest exception, and it publishes the amount.** If you want funds held by the
 contract, the contract has to be shown the coin, and its value is then readable by anyone.
@@ -65,12 +67,12 @@ npm run dev -w @quietbooks/ui             # http://localhost:5173
 You also need:
 
 * **Midnight Lace**, installed in the browser and on the same network as `VITE_NETWORK_ID`.
-* **A proof server.** Every write is a zero-knowledge proof and it is built there, not in the
-  browser. It sees the witness values, so run your own unless you control the remote host:
+* **A proof server.** Every write is a zero-knowledge proof and it is built there, not in
+  the browser. It sees the witness values, so run your own unless you control the remote
+  host. `../localnet` runs one alongside a node and an indexer; alone it is:
 
   ```
-  docker run -p 6300:6300 midnightnetwork/proof-server:latest -- \
-    'midnight-proof-server --network testnet'
+  docker run -p 6300:6300 midnightntwrk/proof-server:8.1.0 midnight-proof-server -v
   ```
 
 * **The compiled proving keys**, in `../contract/build/keys` and `../contract/build/zkir`.
@@ -137,9 +139,10 @@ The actions appear only when the contract would accept them from us in the curre
 Everything irreversible asks for confirmation first. Funding escrow additionally requires you
 to acknowledge that it makes the amount public.
 
-Some of these need values this interface cannot invent: a Zswap note commitment comes from the
-transfer your own wallet made, and a payout key comes from the person being paid. The fields
-say where each one comes from rather than pretending otherwise.
+Some of these need values this interface cannot invent. A payout key comes from the person
+being paid, and it is not the party key shown on the invoice: a party key is a hash and
+nothing can be paid to it. The fields say where each value comes from rather than pretending
+otherwise.
 
 ### Audit
 
