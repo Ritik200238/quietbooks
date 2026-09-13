@@ -401,7 +401,7 @@
       <span><b>Contract</b> Compact 0.23</span>
       <span><b>Entry points</b> 12, compiling</span>
       <span><b>Tests</b> 189 passing</span>
-      <span><b>End to end</b> 20/20 on a live node</span>
+      <span><b>End to end</b> 21/21 on a live node</span>
       <span><b>Licence</b> Apache-2.0</span>
     </div>
   </section>
@@ -696,7 +696,7 @@ instance of the same contract in the same segment.</pre>
     <div class="figures">
       <div class="figure"><span class="n">12</span><span class="l">entry points compiling, with proving and verifying keys</span></div>
       <div class="figure"><span class="n">189</span><span class="l">tests passing against the compiled contract</span></div>
-      <div class="figure"><span class="n">20/20</span><span class="l">end-to-end steps on a live node with real proofs</span></div>
+      <div class="figure"><span class="n">21/21</span><span class="l">end-to-end steps on a live node with real proofs</span></div>
       <div class="figure"><span class="n">0.31.1</span><span class="l">Compact toolchain, pinned in CI</span></div>
     </div>
     <p>The end-to-end run deploys to a real Midnight node, then drives the whole business
@@ -704,20 +704,22 @@ instance of the same contract in the same segment.</pre>
       against the local result of the call. Both privacy claims are asserted, in opposite
       directions: the private path must not leave the amount readable, and the escrow path
       must.</p>
-    <pre class="transcript"><b>PASS</b>  deploy the contract with real ZK proofs            (31.9s)
+    <pre class="transcript"><b>PASS</b>  deploy the contract with real ZK proofs            (25.6s)
 <b>PASS</b>  indexer returns the deployed state
-<b>PASS</b>  issue an invoice                                  (256.0s)
+<b>PASS</b>  issue an invoice                                  (145.1s)
 <b>PASS</b>  the chain shows the invoice and hides its amount
-<b>PASS</b>  the buyer pays the seller and settles in one tx    (216.8s)
+<b>PASS</b>  the buyer pays the seller and settles in one tx    (161.7s)
 <b>PASS</b>  the chain shows the settlement and still hides the amount
-<b>PASS</b>  grant an auditor three fields                      (34.2s)
-<b>PASS</b>  revoke the audit grant                             (36.1s)
-<b>PASS</b>  the buyer funds escrow with a real shielded coin   (192.2s)
+<b>PASS</b>  grant an auditor three fields                      (27.5s)
+<b>PASS</b>  revoke the audit grant                             (31.3s)
+<b>PASS</b>  the buyer funds escrow with a real shielded coin   (150.1s)
 <b>PASS</b>  the contract holds the coin, and its value is public
-<b>PASS</b>  the buyer releases the escrow to the seller        (237.8s)
-<b>PASS</b>  a second party can join the same deployment
+<b>PASS</b>  the buyer opens the deployment through the API
+<b>PASS</b>  the buyer releases the escrow to the seller        (122.6s)
+<b>PASS</b>  the chain shows the escrow paid out and the vault emptied
+<b>PASS</b>  a party who has never seen this deployment can join it
 
-20/20 steps passed</pre>
+21/21 steps passed</pre>
     <div class="cols two">
       <div class="panel">
         <h3>A bug the tests nearly missed</h3>

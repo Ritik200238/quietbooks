@@ -247,31 +247,32 @@ This deploys the contract with real ZK proofs and runs the whole business flow
 against the live node and indexer, asserting every step against state read back
 through the indexer rather than against the local result of the call.
 
-Twenty steps, all passing as of the last run:
+Twenty-one steps, all passing as of the last run:
 
 ```
 PASS  build wallet from the genesis seed
 PASS  wallet syncs with the chain
 PASS  wallet holds NIGHT
 PASS  NIGHT is registered and DUST is spendable
-PASS  deploy the contract with real ZK proofs              (31.9s)
+PASS  deploy the contract with real ZK proofs                  (25.6s)
 PASS  indexer returns the deployed state
-PASS  issue an invoice                                     (256.0s)
+PASS  issue an invoice                                         (145.1s)
 PASS  the chain shows the invoice and hides its amount
-PASS  the buyer pays the seller and settles in one transaction (216.8s)
+PASS  the buyer pays the seller and settles in one transaction (161.7s)
 PASS  the chain shows the settlement and still hides the amount
-PASS  grant an auditor three fields                        (34.2s)
+PASS  grant an auditor three fields                            (27.5s)
 PASS  the chain records the grant exactly as given
-PASS  revoke the audit grant                               (36.1s)
+PASS  revoke the audit grant                                   (31.3s)
 PASS  the chain shows the grant revoked
-PASS  issue a second invoice to be escrowed                (225.2s)
-PASS  the buyer funds escrow with a real shielded coin     (192.2s)
+PASS  issue a second invoice to be escrowed                    (199.0s)
+PASS  the buyer funds escrow with a real shielded coin         (150.1s)
 PASS  the contract holds the coin, and its value is public
-PASS  the buyer releases the escrow to the seller          (237.8s)
+PASS  the buyer opens the deployment through the API
+PASS  the buyer releases the escrow to the seller              (122.6s)
 PASS  the chain shows the escrow paid out and the vault emptied
-PASS  a second party can join the same deployment
+PASS  a party who has never seen this deployment can join it
 
-20/20 steps passed
+21/21 steps passed
 ```
 
 The times are real, from one run on a laptop that was compiling other things at
