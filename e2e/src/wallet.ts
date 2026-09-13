@@ -139,7 +139,19 @@ export const waitForFunds = (
           (s.unshielded?.balances[nativeToken().raw] ?? 0n) +
           (s.shielded?.balances[nativeToken().raw] ?? 0n),
       ),
-      Rx.tap((balance) => logger.info(`NIGHT balance: ${balance}`)),
+      Rx.withLatestFrom(ctx.wallet.state()),
+      // The split matters, not just the total. Escrow hands the contract a
+      // shielded coin, so a wallet holding only unshielded NIGHT can pay fees
+      // and still fail to fund an escrow -- and the failure surfaces deep inside
+      // balancing rather than at the point the funds were checked.
+      Rx.tap(([balance, s]) =>
+        logger.info(
+          `NIGHT balance: ${balance} ` +
+            `(unshielded ${s.unshielded?.balances[nativeToken().raw] ?? 0n}, ` +
+            `shielded ${s.shielded?.balances[nativeToken().raw] ?? 0n})`,
+        ),
+      ),
+      Rx.map(([balance]) => balance),
       Rx.filter((balance) => balance > 0n),
       Rx.timeout({
         each: timeoutMs,

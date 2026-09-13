@@ -39,31 +39,46 @@ finding out why drove the whole design.
 
 - `receiveShielded` requires its argument to be disclosed. Midnight's own
   token-transfer example writes `receiveShielded(disclose(coin))`, and a
-  `ShieldedCoinInfo` carries a plaintext `value`. The moment a contract takes
-  custody of a shielded coin, that coin's value is public.
+  `ShieldedCoinInfo` carries a plaintext `value`.
+- A contract that *holds* a coin publishes what it holds: `ContractState.balance`
+  is documented as the contract's public balances.
 - OpenZeppelin's `ShieldedTreasury` says the same thing in its own header: *"This
   treasury's HOLDINGS ARE PUBLIC."*
-- There is no standard-library circuit that derives a Zswap note commitment from
-  coin data, so a contract cannot re-derive a commitment in-circuit and bind it
-  to a private amount.
 
 So contract custody and hidden amounts are mutually exclusive on Midnight today.
 
-What *is* possible is better than a workaround. `claimZswapCoinReceive(note)`
-makes the ledger refuse a transaction unless a specific Zswap output is present
-in it, using only the 32-byte note commitment. The commitment reveals nothing
-about value or recipient.
+But a contract can **route** a payment without holding it. `receiveShielded`
+followed by `sendImmediateShielded` in the same call takes the coin and passes it
+straight on: the contract's balance changes by zero, nothing is ever in its
+custody, and Zswap hides the value on both legs. This is the shape OpenZeppelin's
+`ForwarderShielded` uses, and `settleWithNote` is that pattern applied to an
+invoice.
 
-QuietBooks therefore settles **peer to peer**: the buyer's wallet makes an
-ordinary shielded transfer, where Zswap hides the amount, and the contract binds
-that transfer to the invoice atomically through its note commitment. The chain
-learns that invoice X was settled by a real shielded output. It never learns for
-how much. An auditor holding the opening can verify the amount exactly.
+The buyer pays the seller *inside the transaction that records the settlement*.
+Either both happen or neither does. The chain learns that invoice X was settled
+and when; it never learns for how much.
 
-Escrow is offered as the honest alternative for parties who want funds actually
-locked by the contract. It takes custody, so it publishes the amount, and it is
-labelled as such everywhere it appears. Offering both, and being explicit about
-the trade, is the design.
+The circuit also proves the payment is the right one. It compares the coin
+against the terms the payer has just proven open the commitment the chain has
+held since issuance, and refuses anything but the exact total — so a buyer cannot
+mark an invoice settled by underpaying it, and neither the payment nor the
+invoiced figure reaches public state.
+
+#### The version of this that did not work
+
+Worth recording, because it survived a full test suite.
+
+The first design took a bare 32-byte note commitment as an argument and called
+`kernel.claimZswapCoinReceive(note)` on it, binding an ordinary buyer-to-seller
+transfer. Every circuit test passed. It could never have produced a valid
+transaction: the ledger requires each contract-associated commitment to be
+claimed by the contract that owns it, so a receive claim only ever accepts the
+commitment of an output addressed to **this** contract. A payment addressed to
+the seller is not, and the node refuses the whole transaction as malformed.
+
+In-process circuit tests cannot catch this, because they never build a
+transaction. The end-to-end run against a real node is what does, and this is the
+argument for having one.
 
 ---
 
@@ -71,7 +86,7 @@ the trade, is the design.
 
 | Path | Who calls it | Amount on chain | Binding |
 |---|---|---|---|
-| `settleWithNote` | Buyer | Hidden | The ledger refuses the call unless the Zswap output named by the note commitment exists in the same transaction |
+| `settleWithNote` | Buyer | Hidden | The buyer's coin is received and forwarded to the seller in the same call, so the payment and the record are one transaction. The circuit also proves the coin equals the invoiced total |
 | `settleAttested` | Seller | Hidden | The seller vouches for receipt. Used for bank transfers and any rail the contract cannot observe. Only the seller may call it, because the seller is the party who loses by lying |
 | `fundEscrow` → `releaseEscrow` | Buyer | **Public** | The contract holds the coin and releases it on confirmation, refunds after a deadline, or moves it on an arbiter's ruling |
 
@@ -232,30 +247,37 @@ This deploys the contract with real ZK proofs and runs the whole business flow
 against the live node and indexer, asserting every step against state read back
 through the indexer rather than against the local result of the call.
 
-Sixteen steps, all passing as of the last run:
+Twenty steps, all passing as of the last run:
 
 ```
 PASS  build wallet from the genesis seed
 PASS  wallet syncs with the chain
 PASS  wallet holds NIGHT
 PASS  NIGHT is registered and DUST is spendable
-PASS  deploy the contract with real ZK proofs          (23.1s)
+PASS  deploy the contract with real ZK proofs              (31.9s)
 PASS  indexer returns the deployed state
-PASS  issue an invoice                                 (97.3s)
+PASS  issue an invoice                                     (256.0s)
 PASS  the chain shows the invoice and hides its amount
-PASS  settle by attestation                            (41.2s)
-PASS  the chain shows the settlement
-PASS  grant an auditor three fields                    (28.3s)
+PASS  the buyer pays the seller and settles in one transaction (216.8s)
+PASS  the chain shows the settlement and still hides the amount
+PASS  grant an auditor three fields                        (34.2s)
 PASS  the chain records the grant exactly as given
-PASS  the chain credits the seller a settlement
-PASS  revoke the audit grant                           (24.0s)
+PASS  revoke the audit grant                               (36.1s)
 PASS  the chain shows the grant revoked
+PASS  issue a second invoice to be escrowed                (225.2s)
+PASS  the buyer funds escrow with a real shielded coin     (192.2s)
+PASS  the contract holds the coin, and its value is public
+PASS  the buyer releases the escrow to the seller          (237.8s)
+PASS  the chain shows the escrow paid out and the vault emptied
 PASS  a second party can join the same deployment
 
-16/16 steps passed
+20/20 steps passed
 ```
 
-The times are real proving times on a laptop, against the pinned proof server.
+The times are real, from one run on a laptop that was compiling other things at
+the same time; treat them as an upper bound rather than a benchmark. What they
+are useful for is the shape: proving dominates, and a settlement costs about
+what an issuance does.
 Each transaction also prints its cost against every block limit before it is
 submitted, because a transaction that exceeds one is refused by the node with a
 message that names neither the limit nor the margin. See **[Why twelve entry

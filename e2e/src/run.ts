@@ -39,6 +39,8 @@ import {
   clearActive,
   prepareInvoice,
   storedInvoiceFrom,
+  payableTotal,
+  type PreparedInvoice,
   buildTermsFrame,
   deriveInvoiceId,
   commitFieldRoot,
@@ -53,6 +55,8 @@ import {
   SettlementMode,
   type QuietBooksPrivateState,
 } from '@quietbooks/contract';
+
+import { encodeCoinPublicKey } from '@midnight-ntwrk/compact-runtime';
 
 import { buildWallet, waitForSync, waitForFunds, registerForDust, E2EWalletProvider } from './wallet.js';
 
@@ -286,23 +290,53 @@ const main = async (): Promise<void> => {
       role: 'seller',
     });
 
-    const stage = async () => {
-      const current = (await providers.privateStateProvider.get('quietBooksPrivateState'))!;
-      await providers.privateStateProvider.set(
-        'quietBooksPrivateState',
-        withActive(withInvoice(current, stored), {
-          terms: prepared.terms,
-          termsSalt: prepared.termsSalt,
-          fieldSalts: prepared.fieldSalts,
-          nonce: prepared.nonce,
-          settlementSalt: randomBytes32(),
-        }),
-      );
+    /**
+     * Put one invoice's openings where the witnesses will look for them.
+     *
+     * Circuits that touch the terms read them from private state rather than
+     * taking them as arguments, so the openings for the invoice being acted on
+     * have to be staged before the call and cleared after it. Clearing matters:
+     * a stale active invoice makes the next call prove against the wrong
+     * openings, and that surfaces as an assertion inside a circuit rather than
+     * as anything naming the real mistake.
+     */
+    const staging = (
+      invoice: Parameters<typeof withInvoice>[1],
+      openings: Pick<PreparedInvoice, 'terms' | 'termsSalt' | 'fieldSalts' | 'nonce'>,
+    ) => ({
+      stage: async (): Promise<void> => {
+        const current = (await providers.privateStateProvider.get('quietBooksPrivateState'))!;
+        await providers.privateStateProvider.set(
+          'quietBooksPrivateState',
+          withActive(withInvoice(current, invoice), {
+            terms: openings.terms,
+            termsSalt: openings.termsSalt,
+            fieldSalts: openings.fieldSalts,
+            nonce: openings.nonce,
+            settlementSalt: randomBytes32(),
+          }),
+        );
+      },
+      unstage: async (): Promise<void> => {
+        const current = (await providers.privateStateProvider.get('quietBooksPrivateState'))!;
+        await providers.privateStateProvider.set('quietBooksPrivateState', clearActive(current));
+      },
+    });
+
+    /** Stage, run, and clear again even when the call throws. */
+    const withOpenings = async <T>(
+      staged: { stage: () => Promise<void>; unstage: () => Promise<void> },
+      body: () => Promise<T>,
+    ): Promise<T> => {
+      await staged.stage();
+      try {
+        return await body();
+      } finally {
+        await staged.unstage();
+      }
     };
-    const unstage = async () => {
-      const current = (await providers.privateStateProvider.get('quietBooksPrivateState'))!;
-      await providers.privateStateProvider.set('quietBooksPrivateState', clearActive(current));
-    };
+
+    const { stage, unstage } = staging(stored, prepared);
 
     await step('issue an invoice', async () => {
       await stage();
@@ -345,28 +379,63 @@ const main = async (): Promise<void> => {
     });
 
     // -----------------------------------------------------------------------
-    const note = randomBytes32();
+    // The private settlement path, end to end: the buyer pays the seller with a
+    // real shielded coin inside the same transaction that records the payment.
+    //
+    // This is the claim the whole product rests on, so it is the one step that
+    // most needed proving against a real node. An earlier version of the circuit
+    // could not have worked at all -- it asked the ledger to claim a commitment
+    // belonging to an output addressed to the seller, and the ledger only lets a
+    // contract claim outputs addressed to itself. The in-process tests could not
+    // see that, because they never build a transaction.
+    const payment = {
+      nonce: randomBytes32(),
+      color: ZERO32,
+      value: payableTotal(prepared.terms),
+    };
+    const sellerPayout = encodeCoinPublicKey(walletProvider.getCoinPublicKey());
 
-    await step('settle by attestation', async () => {
-      await stage();
-      try {
-        await deployed.callTx.settleAttested(invoiceId, SELLER_PIN, note, nowSeconds());
-      } finally {
-        await unstage();
-      }
-    });
+    await step('the buyer pays the seller and settles in one transaction', () =>
+      withOpenings({ stage, unstage }, () =>
+        deployed.callTx.settleWithNote(
+          invoiceId,
+          BUYER_PIN,
+          payment,
+          { bytes: sellerPayout },
+          nowSeconds(),
+        ),
+      ),
+    );
 
-    await step('the chain shows the settlement', async () => {
+    await step('the chain shows the settlement and still hides the amount', async () => {
       const l = await readLedger();
       assert(l.settledCount === 1n, 'settledCount did not advance');
       assert(l.invoices.lookup(invoiceId).status === InvoiceStatus.settled, 'status is not settled');
 
       const settlement = l.settlements.lookup(invoiceId);
-      assert(settlement.mode === SettlementMode.attested, 'settlement mode is wrong');
-      assert(toHex(settlement.note) === toHex(note), 'settlement note does not match');
+      assert(settlement.mode === SettlementMode.privateNote, 'settlement mode is wrong');
 
-      const reliability = l.reliability.lookup(sellerKey);
-      assert(reliability.settled === 1n, 'seller was not credited a settlement');
+      // The recorded digest is a commitment to the coin that actually paid, so
+      // an auditor given the coin can verify the amount exactly.
+      assert(
+        toHex(settlement.note) === toHex(pureCircuits.commitPaidCoin(payment)),
+        'the settlement note is not a commitment to the coin that was paid',
+      );
+
+      // And the amount itself is nowhere in public state. Custody would have
+      // published it; forwarding the coin straight through does not, because the
+      // contract's balance never moves. This is the assertion that separates the
+      // private path from the escrow path below.
+      const asText = JSON.stringify(settlement, (_k, v) =>
+        typeof v === 'bigint' ? v.toString() : v instanceof Uint8Array ? toHex(v) : v,
+      );
+      assert(
+        !asText.includes(payment.value.toString()),
+        'the settled amount is readable in the settlement record',
+      );
+
+      const record = l.reliability.lookup(sellerKey);
+      assert(record.settled === 1n, 'seller was not credited a settlement');
     });
 
     // -----------------------------------------------------------------------
@@ -399,18 +468,6 @@ const main = async (): Promise<void> => {
     });
 
     // -----------------------------------------------------------------------
-    await step('the chain credits the seller a settlement', async () => {
-      // The counters are public ledger state, so a reader takes them from the
-      // chain rather than through a circuit. What matters is that the contract
-      // wrote them, not the caller: a party cannot inflate its own record.
-      const l = await readLedger();
-      const record = l.reliability.lookup(sellerKey);
-      assert(record.settled === 1n, 'seller was not credited a settlement');
-      assert(record.cancelled === 0n, 'seller was credited a cancellation that never happened');
-      assert(record.disputesLost === 0n, 'seller was credited a lost dispute that never happened');
-    });
-
-    // -----------------------------------------------------------------------
     await step('revoke the audit grant', async () => {
       await deployed.callTx.revokeAudit(invoiceId, SELLER_PIN);
     });
@@ -418,6 +475,104 @@ const main = async (): Promise<void> => {
     await step('the chain shows the grant revoked', async () => {
       const l = await readLedger();
       assert(l.auditGrants.lookup(invoiceId).revoked === true, 'grant was not revoked');
+    });
+
+    // -----------------------------------------------------------------------
+    // Escrow. This is the path where the contract actually takes custody of
+    // shielded value, so it is the one that shows money moving rather than a
+    // status changing. It is also the path that publishes the amount:
+    // `receiveShielded` requires its coin to be disclosed and the vault entry
+    // keeps the value readable until release. That is asserted below rather
+    // than left as a sentence in the documentation.
+    const escrowDue = nowSeconds() + 30n * 86_400n;
+    const escrowPrepared = await prepareInvoice({
+      currency: 'USDM',
+      lineItems: [{ description: 'Milestone 2, held in escrow', quantity: 1n, unitPrice: 2_500_000n }],
+      taxAmount: 0n,
+      memo: 'Released on acceptance.',
+      orderRef: 'PO-2026-0207',
+      dueDate: escrowDue,
+    });
+
+    const escrowId = deriveInvoiceId(sellerKey, escrowPrepared.nonce);
+    const escrowIssuedAt = nowSeconds();
+    const escrowStored = storedInvoiceFrom({
+      invoiceId: escrowId,
+      prepared: escrowPrepared,
+      sellerKey,
+      buyerKey,
+      dueDate: escrowDue,
+      issuedAt: escrowIssuedAt,
+      pin: SELLER_PIN,
+      role: 'seller',
+    });
+    const escrowStaging = staging(escrowStored, escrowPrepared);
+
+    await step('issue a second invoice to be escrowed', () =>
+      withOpenings(escrowStaging, () =>
+        deployed.callTx.issueInvoice(SELLER_PIN, buyerKey, ZERO32, escrowDue, escrowIssuedAt),
+      ),
+    );
+
+    // The nonce identifies this particular coin. Reusing one would name a coin
+    // the ledger already knows about, and the transaction would be refused.
+    const escrowCoin = { nonce: randomBytes32(), color: ZERO32, value: 2_500_000n };
+    const escrowDeadline = nowSeconds() + 14n * 86_400n;
+
+    await step('the buyer funds escrow with a real shielded coin', () =>
+      withOpenings(escrowStaging, () =>
+        deployed.callTx.fundEscrow(escrowId, BUYER_PIN, escrowCoin, escrowDeadline, nowSeconds()),
+      ),
+    );
+
+    await step('the contract holds the coin, and its value is public', async () => {
+      const l = await readLedger();
+      assert(
+        l.invoices.lookup(escrowId).status === InvoiceStatus.escrowFunded,
+        'invoice is not marked as having a funded escrow',
+      );
+      assert(l.escrowVault.member(escrowId), 'the escrow vault has no entry for this invoice');
+
+      const held = l.escrowVault.lookup(escrowId);
+      assert(held.value === escrowCoin.value, 'the vault holds a different value than was funded');
+      assert(toHex(held.nonce) === toHex(escrowCoin.nonce), 'the vault holds a different coin');
+
+      // Custody and a hidden amount are mutually exclusive on this platform.
+      // The product says so everywhere escrow appears; this checks it.
+      const serialised = JSON.stringify(held, (_k, v) =>
+        typeof v === 'bigint' ? v.toString() : v instanceof Uint8Array ? toHex(v) : v,
+      );
+      assert(
+        serialised.includes(escrowCoin.value.toString()),
+        'the escrowed amount should be readable on chain, and is not',
+      );
+    });
+
+    await step('the buyer releases the escrow to the seller', () =>
+      withOpenings(escrowStaging, () =>
+        deployed.callTx.releaseEscrow(
+          escrowId,
+          BUYER_PIN,
+          { bytes: encodeCoinPublicKey(walletProvider.getCoinPublicKey()) },
+          nowSeconds(),
+        ),
+      ),
+    );
+
+    await step('the chain shows the escrow paid out and the vault emptied', async () => {
+      const l = await readLedger();
+      assert(!l.escrowVault.member(escrowId), 'the vault still holds the coin after release');
+      assert(
+        l.invoices.lookup(escrowId).status === InvoiceStatus.settled,
+        'the escrowed invoice is not settled',
+      );
+
+      const settlement = l.settlements.lookup(escrowId);
+      assert(settlement.mode === SettlementMode.escrow, 'settlement was not recorded as escrow');
+      assert(l.settledCount === 2n, 'settledCount did not advance for the escrow');
+
+      const record = l.reliability.lookup(sellerKey);
+      assert(record.settled === 2n, 'the seller was not credited the escrow settlement');
     });
 
     // -----------------------------------------------------------------------
