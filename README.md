@@ -425,6 +425,15 @@ Two things follow, and the second is the honest half:
   in a non-native token and settles it, so the mechanism is not native-only — the
   interface is.
 
+One question this raises, since it is the sort of thing a careful reader asks:
+the token is **not** one of the nine disclosable fields, so an auditor granted
+every scope still cannot read it off the invoice. That is deliberate, and it does
+not cost them anything. The settlement record commits to the coin that paid —
+nonce, token and value — so an auditor holding that coin recomputes the digest
+and confirms the token along with the amount. The nine scopes describe what was
+*invoiced*; the settlement digest describes what was *paid*. The token belongs to
+the second question.
+
 ---
 
 ## Testing
