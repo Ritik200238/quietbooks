@@ -36,6 +36,8 @@ export type Connection =
       readonly contractAddress: string;
       readonly endpoints: Endpoints;
       readonly coinPublicKey: string;
+      /** The same key as the 32 bytes a circuit wants. */
+      readonly coinPublicKeyBytes: Uint8Array;
     };
 
 export type Session = {
@@ -100,7 +102,8 @@ export const SessionProvider = ({ children }: { children: ReactNode }): JSX.Elem
       const wallet = await connectToWallet(networkId());
 
       setConnection({ status: 'connecting', step: 'Setting up indexer and proof server' });
-      const { providers, endpoints, shieldedCoinPublicKey } = await buildProviders(wallet);
+      const { providers, endpoints, shieldedCoinPublicKey, shieldedCoinPublicKeyBytes } =
+        await buildProviders(wallet);
 
       const secret = loadOrCreateRootSecret();
 
@@ -126,6 +129,7 @@ export const SessionProvider = ({ children }: { children: ReactNode }): JSX.Elem
         contractAddress,
         endpoints,
         coinPublicKey: shieldedCoinPublicKey,
+        coinPublicKeyBytes: shieldedCoinPublicKeyBytes,
       });
       setEpoch((value) => value + 1);
     } catch (error) {

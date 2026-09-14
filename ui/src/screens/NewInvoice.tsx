@@ -11,6 +11,7 @@
 
 import { useCallback, useMemo, useState, type FormEvent } from 'react';
 
+import { encodeCoinPublicKey } from '@midnight-ntwrk/compact-runtime';
 import type { InvoiceDraft, LineItem } from '@quietbooks/contract';
 import { daysFromNow, fromHex, lineItemsTotal } from '@quietbooks/contract';
 
@@ -46,6 +47,9 @@ const emptyLine = (key: number): LineDraft => ({
   quantity: '1',
   unitPrice: '',
 });
+
+const NOT_A_COIN_KEY =
+  'This is not a coin public key. Ask the buyer for the one their wallet gives out.';
 
 const DECIMALS = [
   { value: '2', label: '2 — cents, pence' },
@@ -85,7 +89,7 @@ const readLine = (
 };
 
 export const NewInvoice = (): JSX.Element => {
-  const { api, contractAddress } = useConnected();
+  const { api, contractAddress, coinPublicKey, coinPublicKeyBytes } = useConnected();
   const { state, refresh } = useSession();
 
   const [lines, setLines] = useState<readonly LineDraft[]>([emptyLine(0)]);
@@ -97,6 +101,7 @@ export const NewInvoice = (): JSX.Element => {
   const [orderRef, setOrderRef] = useState('');
   const [dueDate, setDueDate] = useState(todayInputValue(30));
   const [buyerKey, setBuyerKey] = useState('');
+  const [buyerPayout, setBuyerPayout] = useState('');
   const [arbiterKey, setArbiterKey] = useState('');
   const [formError, setFormError] = useState<string | undefined>(undefined);
   const [shared, setShared] = useState<string | undefined>(undefined);
@@ -149,10 +154,41 @@ export const NewInvoice = (): JSX.Element => {
   // invoice is submitted. The submit button says that part.
   const buyerKeyProblem = buyerKey.trim().length === 0 ? undefined : blockedBy(buyerKeyChecks);
 
+  // A wallet hands out its coin public key in Bech32m, and the circuit wants the
+  // 32 bytes inside it. `encodeCoinPublicKey` is the only thing that reads it
+  // correctly .. taking the string for hex gives the wrong bytes, and gives them
+  // without complaining. It runs on every keystroke, including the half-typed
+  // states, so what it rejects has to arrive as a sentence beside the field
+  // rather than as an exception on submit.
+  const parsedBuyerPayout = useMemo<{ value: Uint8Array } | { error: string } | undefined>(() => {
+    const typed = buyerPayout.trim();
+    if (typed.length === 0) {
+      return undefined;
+    }
+    try {
+      const bytes = encodeCoinPublicKey(typed);
+      // Anything that decodes to another length is not a coin public key .. a
+      // shielded address is the likely mistake, since the two look alike. The
+      // terms would carry it happily and only a dispute would find out.
+      return bytes.length === 32 ? { value: bytes } : { error: NOT_A_COIN_KEY };
+    } catch {
+      return { error: NOT_A_COIN_KEY };
+    }
+  }, [buyerPayout]);
+
+  const buyerPayoutProblem =
+    parsedBuyerPayout !== undefined && 'error' in parsedBuyerPayout
+      ? parsedBuyerPayout.error
+      : undefined;
+
   const blocked = blockedBy([
     [state?.paused === true, PAUSED_REASON],
     [buyerKey.trim().length === 0, 'Ask the buyer for their party key and paste it below.'],
     ...buyerKeyChecks,
+    [
+      buyerPayoutProblem !== undefined,
+      'The buyer payout is the key their wallet gives out, or leave it empty.',
+    ],
     [
       arbiterKey.trim().length > 0 && !isHex32(arbiterKey),
       'The arbiter key is 64 hexadecimal characters, or leave it empty.',
@@ -161,6 +197,10 @@ export const NewInvoice = (): JSX.Element => {
 
   const issue = useAction(
     async () => {
+      // Both payouts go inside the terms commitment, so they are fixed here and
+      // nowhere else. The seller's is this wallet's own; the buyer's only ever
+      // matters if an arbiter rules their way, and an invoice without one simply
+      // cannot be ruled that way.
       const draft: InvoiceDraft = {
         currency: currency.trim(),
         lineItems: items,
@@ -168,6 +208,10 @@ export const NewInvoice = (): JSX.Element => {
         memo,
         orderRef,
         dueDate: fromLocalInputValue(dueDate),
+        sellerPayout: coinPublicKeyBytes,
+        ...(parsedBuyerPayout !== undefined && 'value' in parsedBuyerPayout
+          ? { buyerPayout: parsedBuyerPayout.value }
+          : {}),
       };
       const result = await api.issueInvoice(draft, fromHex(normaliseHex(buyerKey)), {
         ...(arbiterKey.trim().length > 0
@@ -341,6 +385,10 @@ export const NewInvoice = (): JSX.Element => {
                 setLines([emptyLine(nextKey)]);
                 setNextKey((key) => key + 1);
                 setBuyerKey('');
+                // Cleared with the rest of the counterparty: a payout key left
+                // over from the last invoice would name the wrong buyer on this
+                // one, and only a dispute would reveal it.
+                setBuyerPayout('');
                 setArbiterKey('');
                 setMemo('');
                 setOrderRef('');
@@ -588,6 +636,15 @@ export const NewInvoice = (): JSX.Element => {
           <h2>Parties</h2>
         </div>
         <div className="panel-body stack">
+          <div className="field">
+            <span className="field-label">Where you will be paid</span>
+            <Digest value={coinPublicKey} label="your coin public key" lead={24} tail={10} />
+            <span className="field-hint">
+              The coin public key of the wallet connected here. It goes into the terms
+              commitment at issuance, and every circuit that pays this invoice compares its
+              recipient against it, so the money can only ever arrive here.
+            </span>
+          </div>
           <TextField
             label="Buyer party key"
             value={buyerKey}
@@ -596,6 +653,15 @@ export const NewInvoice = (): JSX.Element => {
             placeholder="64 hexadecimal characters"
             hint="Ask the buyer for the key on their header, not the one on yours. It is derived from their secret and this deployment’s salt, so it is theirs alone and only here."
             error={buyerKeyProblem}
+          />
+          <TextField
+            label="Buyer’s coin public key (optional)"
+            value={buyerPayout}
+            onChange={setBuyerPayout}
+            mono
+            placeholder="Leave empty if this invoice has no arbiter"
+            hint="Where the buyer is paid if an arbiter rules a dispute their way, so it is only needed when you name one below. Ask them for it: it is not their party key, which is a hash and cannot receive anything."
+            error={buyerPayoutProblem}
           />
           <TextField
             label="Arbiter party key (optional)"
@@ -610,6 +676,16 @@ export const NewInvoice = (): JSX.Element => {
                 : undefined
             }
           />
+          {arbiterKey.trim().length > 0 && buyerPayout.trim().length === 0 && (
+            <div className="callout callout-warn">
+              <span className="callout-title">
+                This invoice names an arbiter but nowhere to pay the buyer
+              </span>
+              A ruling in the buyer’s favour has to send the escrowed coin somewhere, and that
+              address is fixed at issuance like the rest of the terms. Issue it as it stands and
+              the arbiter will only be able to rule for you.
+            </div>
+          )}
         </div>
         <div className="panel-foot">
           <button

@@ -9,6 +9,8 @@
 
 import { useMemo } from 'react';
 
+import { toHex } from '@quietbooks/contract';
+
 import { Digest } from './Copyable';
 import { routePath, useRoute, type Route } from '../state/router';
 import { useSession } from '../state/session';
@@ -128,6 +130,27 @@ export const Header = (): JSX.Element => {
                     <Digest value={state.partyKey} label="our party key" lead={8} tail={6} />
                   </span>
                 </div>
+
+                {connection.status === 'connected' && (
+                <div className="fact">
+                  <span className="fact-label">Where we get paid</span>
+                  <span className="fact-value">
+                    <Digest
+                      value={toHex(connection.coinPublicKeyBytes)}
+                      label="our coin public key"
+                      lead={8}
+                      tail={6}
+                    />
+                  </span>
+                  {/* A seller issuing an invoice needs the buyer's copy of this,
+                      and until now the interface showed a buyer only their party
+                      key -- which is a hash, and which nobody can pay. */}
+                  <span className="fact-note small quiet">
+                    Send this to anyone invoicing you. Not the party key above: that is a hash,
+                    and nothing can be paid to it.
+                  </span>
+                </div>
+                )}
 
                 <div className="fact">
                   <span className="fact-label">On chain</span>
