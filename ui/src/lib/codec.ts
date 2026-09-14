@@ -24,6 +24,14 @@ const toHex = (bytes: Uint8Array): string => {
 };
 
 const fromHex = (hex: string): Uint8Array => {
+  // Checked, because this reads values out of browser storage that another
+  // version of this interface wrote. `parseInt` returns NaN on a non-hex pair
+  // and writing NaN into a Uint8Array stores zero, so a corrupted record used to
+  // decode to a plausible-looking run of zero bytes and fail later, somewhere
+  // else, as a witness or commitment complaint.
+  if (!/^(?:[0-9a-fA-F]{2})*$/.test(hex)) {
+    throw new Error('quietbooks: a stored value is not hexadecimal');
+  }
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i += 1) {
     out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);

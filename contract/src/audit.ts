@@ -499,6 +499,14 @@ const plaintextMismatch = async (
     }
     expected = fieldNumber(BigInt(plaintext));
   } else if (encoding === 'ascii32') {
+    // No trailing NULs. `padBytes32` right-pads, so "EUR" and "EUR " give
+    // the same 32 bytes and both open the same commitment -- two plaintexts for
+    // one committed value, rendering identically to a person. Harmless in
+    // itself, and an opening that is not unique is not the property this format
+    // is meant to have.
+    if (plaintext.endsWith(' ')) {
+      return `${scope} plaintext carries trailing padding, which has no place in a disclosure`;
+    }
     expected = padBytes32(plaintext);
   } else {
     // An empty memo or order reference is committed as the zero digest, not as
