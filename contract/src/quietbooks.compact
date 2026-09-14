@@ -201,7 +201,22 @@ export struct Reliability {
 export struct InvoiceTerms {
   amount: Uint<128>,
   taxAmount: Uint<128>,
+  // The human label, e.g. "USDM". It names a denomination to a reader; it is
+  // not a token and nothing can be paid to it.
   currency: Bytes<32>,
+  // The shielded token this invoice is payable in, as Zswap's own colour.
+  //
+  // Separate from `currency` because the two answer different questions, and
+  // conflating them is how an invoice reading "USD 1,250.00" gets settled with
+  // 1,250,000,000 units of something worthless. The settlement and escrow paths
+  // compare a coin against this, so a payment in the wrong token is refused
+  // rather than recorded.
+  //
+  // It lives in the terms rather than on the public anchor so that which token
+  // an invoice is denominated in stays between the parties, and it is bound by
+  // the terms commitment the chain has held since issuance, so neither party
+  // can change it afterwards.
+  tokenType: Bytes<32>,
   orderRef: Bytes<32>,
   itemsHash: Bytes<32>,
   memoHash: Bytes<32>
@@ -239,7 +254,7 @@ export circuit SCOPE_COUNT(): Uint<8> { return 9; }
 
 // The rule set version enforced by `issueInvoice`. Bumping this signals to
 // auditors that the acceptance criteria changed.
-export circuit RULES_VERSION(): Uint<8> { return 1; }
+export circuit RULES_VERSION(): Uint<8> { return 2; }
 
 // ---------------------------------------------------------------------------
 // Ledger
@@ -662,6 +677,10 @@ export circuit settleWithNote(
   const terms = invoiceTerms();
   assert(coin.value == terms.amount + terms.taxAmount,
          "quietbooks: payment does not equal the invoice total");
+  // The right number of the wrong token is not payment. Without this a buyer
+  // could settle a real invoice with any coin whose value happened to match.
+  assert(coin.color == terms.tokenType,
+         "quietbooks: payment is not in the token this invoice is payable in");
 
   receiveShielded(disclose(coin));
   sendImmediateShielded(
@@ -812,6 +831,13 @@ export circuit fundEscrow(
 
   assert(disclose(deadline) > disclose(fundedAt), "quietbooks: escrow deadline must be in the future");
   assert(disclose(coin).value > 0, "quietbooks: escrowed amount must be positive");
+
+  // Escrow locks a coin that is later released as settlement of this invoice,
+  // so it has to be the token this invoice is payable in. The caller has just
+  // proven they hold the terms, so the comparison is against something the
+  // chain has been committed to since issuance.
+  assert(coin.color == invoiceTerms().tokenType,
+         "quietbooks: escrow is not in the token this invoice is payable in");
 
   // The coin must appear as an output addressed to this contract in this
   // transaction, or the ledger rejects the call.

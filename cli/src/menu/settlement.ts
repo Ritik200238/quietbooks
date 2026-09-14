@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import { fromHex, randomBytes32, sha256, toHex, ZERO32 } from '@quietbooks/contract';
+import { fromHex, randomBytes32, sha256, toHex } from '@quietbooks/contract';
 
 import type { AppContext } from '../context.js';
 import { groupDigits, heading, out } from '../format.js';
@@ -29,8 +29,9 @@ export const settleWithNote = async (context: AppContext): Promise<void> => {
     out('  Nothing was sent.');
     return;
   }
-  if (view.payable === undefined) {
-    out('  This wallet cannot open that invoice, so it cannot know what to pay.');
+  if (view.stored === undefined || view.payable === undefined) {
+    out('  This wallet cannot open that invoice, so it cannot know what to pay,');
+    out('  or in which token. Ask the seller to share its record first.');
     return;
   }
 
@@ -52,7 +53,10 @@ export const settleWithNote = async (context: AppContext): Promise<void> => {
 
   // The nonce identifies this particular coin. A fresh one every time, because
   // reusing one names a coin the ledger already knows about.
-  const coin = { nonce: randomBytes32(), color: ZERO32, value: view.payable };
+  // The token comes from the invoice, not from a default. The circuit refuses a
+  // coin of any other colour, which is what stops an invoice denominated in one
+  // thing being settled with the right number of another.
+  const coin = { nonce: randomBytes32(), color: view.stored.terms.tokenType, value: view.payable };
 
   out('');
   out('  Proving and submitting. This builds the payment and the contract call as');
