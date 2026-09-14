@@ -128,6 +128,19 @@ export enum DisputeOutcome {
 
 // The public record of an invoice. Contains no commercial value of any kind:
 // every number here is either a timestamp, a status, or a 32-byte digest.
+//
+// The timestamps are the caller's claim, and the contract cannot make them
+// anything else. Compact exposes the chain's clock only as four comparisons
+// .. `blockTimeLt`, `blockTimeLte`, `blockTimeGt`, `blockTimeGte`
+// (`compact/standard-library/exports.md`) .. and no circuit that returns the
+// time, so a contract can test a date but never record one. Every date stored
+// here is therefore a label, not evidence.
+//
+// What matters is that no rule reads them. Punctuality, escrow deadlines and
+// audit-grant windows are all decided by comparing against the block, and the
+// three places that once compared one caller argument to another are gone. The
+// dates stay because a reader wants to see what the parties said, and because
+// refusing to store them would not make the parties any more honest.
 export struct InvoiceAnchor {
   status: InvoiceStatus,
   // persistentCommit(TermsFrame, termsSalt) .. binds amount, tax, currency,
@@ -267,7 +280,14 @@ export circuit SCOPE_COUNT(): Uint<8> { return 9; }
 
 // The rule set version enforced by `issueInvoice`. Bumping this signals to
 // auditors that the acceptance criteria changed.
-export circuit RULES_VERSION(): Uint<8> { return 2; }
+//
+// 1: the original set .. positive amount, tax within the principal, due date
+//    after issuance, both parties named and distinct, currency set, total
+//    payable as a single coin.
+// 2: the token an invoice is payable in became part of the terms.
+// 3: an invoice must name where the seller is paid, and an invoice that names an
+//    arbiter must name a separate address for the buyer.
+export circuit RULES_VERSION(): Uint<8> { return 3; }
 
 // ---------------------------------------------------------------------------
 // Ledger
@@ -503,6 +523,12 @@ circuit assertTermsValid(frame: TermsFrame, issuedAt: Uint<64>): [] {
   assert(frame.sellerKey != frame.buyerKey, "quietbooks: seller and buyer must differ");
   assert(frame.sellerKey != default<Bytes<32>>, "quietbooks: seller key must be set");
   assert(frame.buyerKey != default<Bytes<32>>, "quietbooks: buyer key must be set");
+  // Every paying circuit now sends to the address the terms name and to no
+  // other, so an invoice naming nobody is an invoice whose settlement burns the
+  // payment. The local witness refuses this too, but the local witness is the
+  // honest prover: this is the copy of the rule an attacker cannot replace.
+  assert(frame.terms.sellerPayout != default<Bytes<32>>,
+         "quietbooks: seller payout address must be set");
   // Tax is expressed on top of the principal. Allowing it to exceed the
   // principal admits no real invoice and would let a payer be over-charged
   // through a malformed envelope the auditor could not distinguish from a
@@ -615,6 +641,21 @@ export circuit issueInvoice(
 
   assertTermsValid(frame, disclose(issuedAt));
 
+  // An invoice with an arbiter has to be able to pay either side.
+  //
+  // `resolveDispute` binds the arbiter's payment to the address the terms name
+  // for the party the ruling favours. So on an invoice that names no buyer
+  // address, a ruling for the buyer sends the escrow to the zero key and burns
+  // it; on one that names the seller's address for both sides, it hands the
+  // escrow to the seller. The seller writes the terms and the seller is the one
+  // who gains from either outcome, so without this rule a seller can issue an
+  // invoice an arbiter is structurally unable to rule against -- which is the
+  // one thing naming an arbiter is supposed to prevent.
+  assert(arbiterKey == default<Bytes<32>> ||
+         (frame.terms.buyerPayout != default<Bytes<32>> &&
+          frame.terms.buyerPayout != frame.terms.sellerPayout),
+         "quietbooks: an invoice with an arbiter needs a buyer payout address of its own");
+
   invoices.insert(disclose(invoiceId), InvoiceAnchor {
     status: InvoiceStatus.issued,
     terms: disclose(commitTerms(frame, termsSalt())),
@@ -633,21 +674,6 @@ export circuit issueInvoice(
   return disclose(invoiceId);
 }
 
-// Prove the caller holds the terms behind an invoice's commitment. Used by every
-// settlement path: it is what stops a party from settling an invoice whose terms
-// they cannot actually open, and it is the only reason the contract can be sure
-// the hidden amount it never sees is the one both sides agreed to.
-// Prove the caller holds terms that open this invoice's commitment.
-//
-// The terms are passed IN rather than read here, and that is the whole point.
-// `invoiceTerms()` is a witness: the prover supplies it, and every call is an
-// independent private input. A circuit that read it here and then read it again
-// to check an amount would be comparing two unrelated values -- the first proven
-// against the commitment, the second free. A malicious prover returns the real
-// terms to this circuit and anything they like to the next.
-//
-// Threading one read through every use is what makes "the terms are the ones the
-// chain committed to" true rather than merely intended.
 // Was this settled on or before the due date, according to the chain?
 //
 // Every settlement path used to decide this from a `settledAt` the caller passed
@@ -659,6 +685,21 @@ circuit onTimeNow(dueDate: Uint<64>): Boolean {
   return !blockTimeGt(dueDate);
 }
 
+// Prove the caller holds terms that open this invoice's commitment. Used by
+// every settlement path: it is what stops a party from acting on an invoice
+// whose terms they cannot open, and it is the only reason the contract can be
+// sure the hidden amount it never sees is the one both sides agreed to.
+//
+// The terms are passed IN rather than read here, and that is the whole point.
+// `invoiceTerms()` is a witness: the prover supplies it, and every call is an
+// independent private input. A circuit that read it here and then read it again
+// to check an amount would be comparing two unrelated values -- the first proven
+// against the commitment, the second free. A malicious prover returns the real
+// terms to this circuit and anything they like to the next.
+//
+// Threading one read through every use is what makes "the terms are the ones the
+// chain committed to" true rather than merely intended. `hostile-witness.test.ts`
+// holds that claim down with a prover that actually lies.
 circuit assertHoldsTerms(invoiceId: Bytes<32>, anchor: InvoiceAnchor, terms: InvoiceTerms): [] {
   const frame = TermsFrame {
     invoiceId: invoiceId,
@@ -851,12 +892,18 @@ export circuit cancelInvoice(invoiceId: Bytes<32>, sellerPin: Uint<64>): [] {
 // ---------------------------------------------------------------------------
 
 // Buyer locks the payment with the contract.
+//
+// There is no `fundedAt` argument. There was, and once the deadline started
+// being checked against the block instead of against it, nothing read it -- but
+// it was still a public field on every funding transaction, and a timestamp in
+// the clear is exactly the kind of thing that correlates a buyer across
+// invoices. A parameter that costs privacy and buys nothing is worse than no
+// parameter.
 export circuit fundEscrow(
   invoiceId: Bytes<32>,
   buyerPin: Uint<64>,
   coin: ShieldedCoinInfo,
-  deadline: Uint<64>,
-  fundedAt: Uint<64>
+  deadline: Uint<64>
 ): [] {
   assertNotPaused();
   const id = disclose(invoiceId);
@@ -968,6 +1015,14 @@ export circuit refundEscrow(
   assert(escrowVault.member(id), "quietbooks: escrow vault entry missing");
   const held = escrowVault.lookup(id);
 
+  // `buyerPayout` is deliberately not bound to `terms.buyerPayout`, and this is
+  // the only paying circuit where that is right. Everywhere else the address is
+  // bound because the caller is directing somebody else's money: the buyer
+  // paying the seller, the arbiter paying whichever side won. Here the caller
+  // has already proven they are the buyer and the money is going back to the
+  // buyer, so the only person a free choice of address can hurt is the person
+  // making it. Binding it would also mean an invoice issued without a buyer
+  // address could never be refunded, which turns a deadline into a trap.
   sendShielded(held, left<ZswapCoinPublicKey, ContractAddress>(disclose(buyerPayout)), held.value);
   escrowVault.remove(id);
 
@@ -1001,8 +1056,16 @@ export circuit openDispute(invoiceId: Bytes<32>, partyPin: Uint<64>): [] {
 }
 
 // The named arbiter decides, and the escrowed coin moves in the same call. The
-// arbiter never learns the invoice terms: they rule on evidence exchanged off
-// chain and the contract only lets them choose a direction.
+// contract only lets them choose a direction; the address each direction pays is
+// fixed by the invoice.
+//
+// That binding has a price, and it is worth stating plainly: proving it needs
+// the terms, so the arbiter has to hold the invoice openings, which means the
+// arbiter sees the amount. An earlier version of this comment claimed they never
+// did, and it was written before the binding existed. The alternative is an
+// arbiter who rules for one party and pays a third, so the disclosure is the
+// cheaper of the two. It is a disclosure to one named party the seller chose,
+// not to the chain: nothing here reaches public state.
 export circuit resolveDispute(
   invoiceId: Bytes<32>,
   arbiterPin: Uint<64>,
@@ -1050,19 +1113,27 @@ export circuit resolveDispute(
     // asymmetry that turns into a reconciliation bug a year later.
     //
     // The receipt is deliberately zero rather than a commitment. A receipt
-    // commits to the payer's identity under a salt only that payer holds, and
-    // the arbiter is neither party and never receives the invoice openings.
-    // Publishing a digest that hides nothing would be worse than publishing an
-    // explicit absence: an auditor reading a zero receipt knows immediately
-    // that this settlement was decided rather than paid.
+    // commits to the payer's identity under a settlement salt only that payer
+    // holds, and the arbiter is neither party: they hold the invoice openings,
+    // not the payer's salt. Publishing a digest that hides nothing would be
+    // worse than publishing an explicit absence: an auditor reading a zero
+    // receipt knows immediately that this settlement was decided rather than
+    // paid.
+    // One reading of the clock, used for both. They were two: the record took
+    // the block's answer and the counter took `at <= anchor.dueDate`, a date the
+    // arbiter supplies. So the seller's public reliability could say on time
+    // while the settlement record beside it said late, and the number a
+    // counterparty is asked to trust was still one a caller chose.
+    const onTime = onTimeNow(anchor.dueDate);
+
     settlements.insert(id, Settlement {
       mode: SettlementMode.escrow,
       note: commitEscrowCoin(held),
       receipt: default<Bytes<32>>,
       settledAt: at,
-      onTime: onTimeNow(anchor.dueDate)
+      onTime: onTime
     });
-    bumpSettled(anchor.sellerKey, at <= anchor.dueDate);
+    bumpSettled(anchor.sellerKey, onTime);
     settledCount.increment(1);
   }
 
