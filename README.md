@@ -126,7 +126,43 @@ The validator runs eight checks in order and reports each one individually:
 7. every disclosed field's commitment recomputes from its plaintext and salt
 8. all nine commitments fold back into the on-chain field root
 
-A validator reports; it never throws on a failed check.
+A validator reports; it never throws on a failed check. A passing report also
+carries the fields it verified, and a failing one carries nothing — so a tool
+showing an auditor a number is showing one the checks were about.
+
+### The hole all eight checks could not see
+
+Worth its own paragraph, because it is the sharpest bug found in this project
+and none of the eight checks was wrong.
+
+Every check was computed from the parsed JSON object. The auditor receives
+bytes. `JSON.parse` keeps the last of two identical keys and drops the first
+without a word, so a seller could write `"disclosed"` twice: an object full of
+ungranted fields first, the one field they were granted second. Check 5 counted
+one field and passed. The auditor decrypted the text and read all of them.
+
+The smuggled fields were not decoration — they carry real salts, so they open
+the commitments the chain has held since issuance. The auditor ends up with
+cryptographic proof of an amount they were never granted, inside a document the
+validator certified as contained.
+
+No amount of care inside the checks could have caught it, because they all read
+the parse. The fix is one line and a different question: the payload has to
+**be** its canonical form, not merely parse to it. Re-serialise what was parsed,
+require it to equal what was decrypted. Duplicate keys, padding, key order and
+unicode-escape spellings all fail together.
+
+Three smaller seams from the same review closed with it. The envelope itself had
+no schema check, so a cleartext `sellerNote` travelled in the open beside a
+report calling the envelope contained — and cleartext is outside the associated
+data, so a relay could add one, not only the sealer. `integrity.payloadHash` was
+outside the associated data while the doc comment said otherwise, so flipping one
+character made an honest seller's envelope report that they had forged it. And
+the rendered report interpolated attacker-chosen strings, so a version string
+carrying an ANSI escape could erase the `FAIL` line and redraw it as a `PASS`.
+
+The format is `quietbooks-audit/2`; version 1 is refused by name, because
+neither hole is fixable by reading a version 1 envelope more carefully.
 
 ---
 
@@ -556,7 +592,7 @@ chain, and it buys a dispute process whose outcome cannot be redirected.
 | `audit-envelope.test.ts` | Envelope crypto and all eight validator checks |
 | `hostile-witness.test.ts` | What the contract does when the prover lies |
 
-234 tests, all passing, no Docker required: they drive the compiled contract
+257 tests, all passing, no Docker required: they drive the compiled contract
 in-process through `@midnight-ntwrk/compact-runtime`, so a full run takes about
 eleven seconds.
 
@@ -589,9 +625,13 @@ recompile, and check the suite actually goes red.
 
 `compact compile --skip-zk` produces a `contract/index.js` byte-identical to the
 shipped build, so a mutant compiles in eight seconds and the whole sweep runs in
-minutes. Sixteen reverted fixes, sixteen failing tests — including the double
+minutes. Eighteen reverted fixes, eighteen failing tests — including the double
 witness read, which now fails on a test that asserts the prover is asked exactly
 once, rather than on one consequence of asking twice.
+
+`npm run test:mutation --workspace @quietbooks/contract` runs it, and CI runs it
+on every push. Without that, deleting a rule and the test that guards it in the
+same commit is a green build.
 
 One mutant can no longer be written at all: `fundEscrow` used to compare its
 deadline against a `fundedAt` the same caller supplied, and that argument has
