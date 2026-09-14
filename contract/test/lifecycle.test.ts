@@ -8,6 +8,7 @@ import {
   actor,
   advance,
   bytes32,
+  BUYER_PAYOUT,
   BUYER_PIN,
   BUYER_SECRET,
   coin,
@@ -19,21 +20,29 @@ import {
   issue,
   led,
   OTHER_TOKEN,
-  pk,
+  payoutTo,
+  SELLER_PAYOUT,
   SELLER_PIN,
   SELLER_SECRET,
   share,
   stageFor,
+  STRANGER_PAYOUT,
   STRANGER_SECRET,
   T0,
 } from './harness.js';
 
 import { InvoiceStatus, pureCircuits, SettlementMode } from '../build/contract/index.js';
-import { NATIVE_SHIELDED_TOKEN, payableTotal, prepareInvoice } from '../src/invoice.js';
+import type { InvoiceTerms } from '../build/contract/index.js';
+import {
+  NATIVE_SHIELDED_TOKEN,
+  payableTotal,
+  prepareInvoice,
+  type PreparedInvoice,
+} from '../src/invoice.js';
 import { randomBytes32, toHex } from '../src/util.js';
 
-/** Where the buyer sends the payment. The contract only forwards to it. */
-const SELLER_PAYOUT = pk(0x77);
+/** The address the fixture invoice names, shaped as the circuit wants it. */
+const TO_SELLER = payoutTo(SELLER_PAYOUT);
 
 describe('issuing an invoice', () => {
   it('writes an anchor holding no commercial value at all', async () => {
@@ -48,7 +57,14 @@ describe('issuing an invoice', () => {
     expect(toHex(anchor.buyerKey)).toBe(toHex(buyer.key));
     expect(anchor.dueDate).toBe(draft().dueDate);
     expect(anchor.settledAt).toBe(0n);
-    expect(anchor.rulesVersion).toBe(2n);
+    // Against the circuit, not a literal: what this pins down is that the anchor
+    // records the rule set the contract actually enforced, so an invoice issued
+    // under one set can never be read back as if it were issued under another.
+    expect(anchor.rulesVersion).toBe(pureCircuits.RULES_VERSION());
+    // And the literal separately, so that changing the issuance rules without
+    // bumping the version is a failing test rather than a silent rewrite of what
+    // every earlier invoice appears to have promised.
+    expect(pureCircuits.RULES_VERSION()).toBe(3n);
 
     // The anchor is fixed width and carries only digests and timestamps. The
     // amount exists nowhere in it, which is the property the whole design is
@@ -137,6 +153,22 @@ describe('issuing an invoice', () => {
       await attempt({}, new Uint8Array(32), draft().dueDate, T0),
       'buyer key must be set',
     );
+
+    // A shielded coin's value is a Uint<128>, so a total above that ceiling can
+    // never be paid. Refusing it here beats issuing an invoice nobody can settle
+    // and nobody can cancel out of without the seller's key.
+    expectThrows(
+      await attempt(
+        {
+          lineItems: [{ description: 'Tranche', quantity: 1n, unitPrice: 2n ** 128n - 1n }],
+          taxAmount: 1n,
+        },
+        buyer.key,
+        draft().dueDate,
+        T0,
+      ),
+      'invoice total is too large to be paid',
+    );
   });
 
   it('refuses to issue while paused, and resumes afterwards', async () => {
@@ -181,29 +213,53 @@ describe('settling with a bound shielded transfer', () => {
    * The coin is handed back with the result because the recorded note is a
    * commitment to it: a test that wants to check the note has to know which coin
    * was spent.
+   *
+   * `at` is the block the settlement lands in and `claims` is the timestamp the
+   * buyer writes on it. They are the same figure unless a test pulls them apart,
+   * which is the only way to show that punctuality is decided by the chain and
+   * not by the party filling in the form.
    */
-  const settle = async (options: { at?: bigint; draft?: Parameters<typeof draft>[0] } = {}) => {
+  const settle = async (
+    options: {
+      at?: bigint;
+      claims?: bigint;
+      draft?: Parameters<typeof draft>[0];
+      /** The settlement salt to stage, when a test needs to know which one. */
+      salt?: Uint8Array;
+      prepared?: PreparedInvoice;
+      payment?: ReturnType<typeof coin>;
+    } = {},
+  ) => {
     const d0 = deploy();
     const seller = actor(d0, SELLER_SECRET, SELLER_PIN);
     const buyer = actor(d0, BUYER_SECRET, BUYER_PIN);
-    const issued = await issue(d0, seller, buyer, { draft: options.draft });
+    const issued = await issue(d0, seller, buyer, {
+      draft: options.draft,
+      prepared: options.prepared,
+    });
 
     // The buyer can only settle an invoice whose terms they can open, so the
     // seller must share the record out of band first. That is a real step in the
     // product, not a test artefact.
-    const buyerState = stageFor(share(buyer.state, issued.stored), issued.prepared);
+    const buyerState = stageFor(
+      share(buyer.state, issued.stored),
+      issued.prepared,
+      options.salt ?? randomBytes32(),
+    );
     const at = options.at ?? T0 + DAY;
-    const payment = coin(payableTotal(issued.prepared.terms), issued.prepared.terms.tokenType);
+    const claims = options.claims ?? at;
+    const payment =
+      options.payment ?? coin(payableTotal(issued.prepared.terms), issued.prepared.terms.tokenType);
 
     const result = issued.d.contract.impureCircuits.settleWithNote(
       ctx(issued.d, buyerState, at),
       issued.invoiceId,
       buyer.pin,
       payment,
-      SELLER_PAYOUT,
-      at,
+      TO_SELLER,
+      claims,
     );
-    return { ...issued, seller, buyer, d: advance(issued.d, result), at, payment };
+    return { ...issued, seller, buyer, d: advance(issued.d, result), at, claims, payment };
   };
 
   it('marks the invoice settled and records only a digest', async () => {
@@ -236,8 +292,29 @@ describe('settling with a bound shielded transfer', () => {
   });
 
   it('treats settlement exactly on the due date as on time', async () => {
-    const { d, invoiceId } = await settle({ at: draft().dueDate });
+    // The boundary the counters turn on, and one nothing exercised before. The
+    // circuit asks whether the block is strictly past the due date, so a block
+    // landing on the second of the deadline is punctual.
+    const { d, invoiceId } = await settle({ at: draft().dueDate, claims: draft().dueDate + DAY });
     expect(led(d).settlements.lookup(invoiceId).onTime).toBe(true);
+  });
+
+  it('takes punctuality from the block, not from the timestamp the buyer supplies', async () => {
+    // The buyer settles a month late and writes yesterday's date on it. Every
+    // settlement path used to compute `onTime` from exactly that figure, so a
+    // payer could award the seller a punctuality mark -- or withhold one -- by
+    // choosing a number. The block is the one clock nobody at the keyboard owns.
+    const claims = T0 + DAY;
+    const { d, invoiceId, seller } = await settle({ at: draft().dueDate + DAY, claims });
+
+    const settlement = led(d).settlements.lookup(invoiceId);
+    expect(settlement.onTime).toBe(false);
+
+    // The claimed date is still what the record shows, so the two really are
+    // independent and the test is not passing because the argument was ignored.
+    expect(settlement.settledAt).toBe(claims);
+    expect(led(d).invoices.lookup(invoiceId).settledAt).toBe(claims);
+    expect(led(d).reliability.lookup(seller.key).settledOnTime).toBe(0n);
   });
 
   it('refuses a second settlement of the same invoice', async () => {
@@ -250,7 +327,7 @@ describe('settling with a bound shielded transfer', () => {
           invoiceId,
           buyer.pin,
           coin(payableTotal(prepared.terms)),
-          SELLER_PAYOUT,
+          TO_SELLER,
           T0 + 2n * DAY,
         ),
       'not open for settlement',
@@ -260,14 +337,15 @@ describe('settling with a bound shielded transfer', () => {
   /**
    * Set up a settlement attempt and hand back the call, unmade.
    *
-   * The token the invoice names, the token actually paid and the amount paid
-   * vary independently, which is the only way a test can say which of the two
-   * payment rules refused a coin.
+   * The token the invoice names, the token actually paid, the amount paid and
+   * the address paid vary independently, which is the only way a test can say
+   * which of the three payment rules refused a settlement.
    */
   const settleWith = async (attempt: {
     delta?: bigint;
     invoiceToken?: Uint8Array;
     paidToken?: Uint8Array;
+    payTo?: Uint8Array;
   }) => {
     const d0 = deploy();
     const seller = actor(d0, SELLER_SECRET, SELLER_PIN);
@@ -286,7 +364,7 @@ describe('settling with a bound shielded transfer', () => {
           payableTotal(issued.prepared.terms) + (attempt.delta ?? 0n),
           attempt.paidToken ?? issued.prepared.terms.tokenType,
         ),
-        SELLER_PAYOUT,
+        payoutTo(attempt.payTo ?? SELLER_PAYOUT),
         T0 + DAY,
       );
   };
@@ -341,6 +419,26 @@ describe('settling with a bound shielded transfer', () => {
     );
   });
 
+  // The recipient used to be a free argument nothing asserted on. The buyer is
+  // the only caller here, so an unbound recipient let them forward their own
+  // payment to themselves and still have the invoice recorded as settled -- a
+  // paid invoice with no money in it, and no trace of the substitution in public
+  // state. The address now comes out of the terms the chain committed to at
+  // issuance, so neither side can change it after the fact.
+  it('refuses a payment addressed to the buyer instead of the seller', async () => {
+    expectThrows(
+      await settleWith({ payTo: BUYER_PAYOUT }),
+      'payment is not addressed to the seller on this invoice',
+    );
+  });
+
+  it('refuses a payment addressed to someone outside the invoice entirely', async () => {
+    expectThrows(
+      await settleWith({ payTo: STRANGER_PAYOUT }),
+      'payment is not addressed to the seller on this invoice',
+    );
+  });
+
   it('records a digest of the coin that was actually paid', async () => {
     const a = await settle();
     const b = await settle({ draft: { taxAmount: 125_000n } });
@@ -352,6 +450,49 @@ describe('settling with a bound shielded transfer', () => {
     expect(toHex(first.note)).toBe(toHex(pureCircuits.commitPaidCoin(a.payment)));
     expect(toHex(second.note)).toBe(toHex(pureCircuits.commitPaidCoin(b.payment)));
     expect(toHex(first.note)).not.toBe(toHex(second.note));
+  });
+
+  it('records a receipt that opens under the salt the payer staged', async () => {
+    const salt = bytes32(0x5d);
+    const { d, invoiceId, buyer } = await settle({ salt });
+
+    // Nothing asserted on the receipt before this. Replacing `settlementSalt()`
+    // with a constant left the whole suite green, and that salt is the only
+    // high-entropy input to a digest the contract writes to public state: with a
+    // fixed one, anybody could recompute the receipt for a guessed payer key and
+    // read off who paid an invoice they are not party to.
+    const settlement = led(d).settlements.lookup(invoiceId);
+    expect(toHex(settlement.receipt)).toBe(
+      toHex(pureCircuits.commitSettlementReceipt(invoiceId, settlement.note, buyer.key, salt)),
+    );
+
+    // Under any other salt the same three inputs give a different digest, so the
+    // equality above is a statement about this opening and not a tautology.
+    expect(toHex(settlement.receipt)).not.toBe(
+      toHex(
+        pureCircuits.commitSettlementReceipt(invoiceId, settlement.note, buyer.key, bytes32(0x5e)),
+      ),
+    );
+  });
+
+  it('gives two structurally identical settlements unrelated receipts', async () => {
+    // Same deployment salt, same invoice openings, same coin and the same buyer,
+    // so the identifier, the note and the payer key all match across the two.
+    // The settlement salt is the only input left that can separate the digests,
+    // which makes this the test a constant salt cannot survive.
+    const prepared = await prepareInvoice(draft());
+    const payment = coin(payableTotal(prepared.terms), prepared.terms.tokenType);
+
+    const a = await settle({ prepared, payment });
+    const b = await settle({ prepared, payment });
+
+    const first = led(a.d).settlements.lookup(a.invoiceId);
+    const second = led(b.d).settlements.lookup(b.invoiceId);
+
+    expect(b.invoiceHex).toBe(a.invoiceHex);
+    expect(toHex(second.note)).toBe(toHex(first.note));
+    expect(toHex(b.buyer.key)).toBe(toHex(a.buyer.key));
+    expect(toHex(second.receipt)).not.toBe(toHex(first.receipt));
   });
 
   it('keeps the paid amount out of the digest', async () => {
@@ -385,7 +526,7 @@ describe('settling with a bound shielded transfer', () => {
           issued.invoiceId,
           stranger.pin,
           coin(payableTotal(issued.prepared.terms)),
-          SELLER_PAYOUT,
+          TO_SELLER,
           T0 + DAY,
         ),
       'caller is not the buyer',
@@ -406,7 +547,7 @@ describe('settling with a bound shielded transfer', () => {
           issued.invoiceId,
           buyer.pin + 1n,
           coin(payableTotal(issued.prepared.terms)),
-          SELLER_PAYOUT,
+          TO_SELLER,
           T0 + DAY,
         ),
       'caller is not the buyer',
@@ -435,7 +576,7 @@ describe('settling with a bound shielded transfer', () => {
           issued.invoiceId,
           buyer.pin,
           coin(payableTotal(tampered.terms)),
-          SELLER_PAYOUT,
+          TO_SELLER,
           T0 + DAY,
         ),
       'terms do not open the recorded commitment',
@@ -456,7 +597,7 @@ describe('settling with a bound shielded transfer', () => {
           bytes32(0xee),
           buyer.pin,
           coin(payableTotal(issued.prepared.terms)),
-          SELLER_PAYOUT,
+          TO_SELLER,
           T0 + DAY,
         ),
       'unknown invoice',
@@ -465,6 +606,48 @@ describe('settling with a bound shielded transfer', () => {
 });
 
 describe('settling by seller attestation', () => {
+  /** Attest at block `at`, writing `claims` on the record. */
+  const attest = async (options: { at: bigint; claims: bigint }) => {
+    const d0 = deploy();
+    const seller = actor(d0, SELLER_SECRET, SELLER_PIN);
+    const buyer = actor(d0, BUYER_SECRET, BUYER_PIN);
+    const issued = await issue(d0, seller, buyer);
+
+    const sellerState = stageFor(share(seller.state, issued.stored), issued.prepared);
+    const result = issued.d.contract.impureCircuits.settleAttested(
+      ctx(issued.d, sellerState, options.at),
+      issued.invoiceId,
+      seller.pin,
+      bytes32(0x7c),
+      options.claims,
+    );
+    return { ...issued, seller, d: advance(issued.d, result) };
+  };
+
+  it('takes punctuality from the block, not from the seller attesting', async () => {
+    // This is the path the self-certification mattered most on: the seller is
+    // the caller, the reliability record is the seller's own, and the timestamp
+    // used to be theirs to choose. A seller attesting a month late could file a
+    // date inside the window and award themselves the punctuality mark that
+    // counterparties are asked to read.
+    const claims = T0 + DAY;
+    const { d, invoiceId, seller } = await attest({ at: draft().dueDate + DAY, claims });
+
+    const settlement = led(d).settlements.lookup(invoiceId);
+    expect(settlement.onTime).toBe(false);
+    expect(settlement.settledAt).toBe(claims);
+    expect(led(d).reliability.lookup(seller.key).settled).toBe(1n);
+    expect(led(d).reliability.lookup(seller.key).settledOnTime).toBe(0n);
+  });
+
+  it('treats an attestation exactly on the due date as on time', async () => {
+    const { d, invoiceId } = await attest({
+      at: draft().dueDate,
+      claims: draft().dueDate + 10n * DAY,
+    });
+    expect(led(d).settlements.lookup(invoiceId).onTime).toBe(true);
+  });
+
   it('lets the seller record an off-chain payment', async () => {
     const d0 = deploy();
     const seller = actor(d0, SELLER_SECRET, SELLER_PIN);
@@ -565,7 +748,7 @@ describe('cancelling', () => {
         issued.invoiceId,
         buyer.pin,
         coin(payableTotal(issued.prepared.terms)),
-        SELLER_PAYOUT,
+        TO_SELLER,
         T0 + DAY,
       ),
     );
@@ -604,7 +787,7 @@ describe('cancelling', () => {
           issued.invoiceId,
           buyer.pin,
           coin(payableTotal(issued.prepared.terms)),
-          SELLER_PAYOUT,
+          TO_SELLER,
           T0 + DAY,
         ),
       'not open for settlement',
@@ -640,6 +823,29 @@ describe('private state guards', () => {
     expect(() =>
       stageFor(seller.state, { ...prepared, termsSalt: new Uint8Array(32) }),
     ).toThrow('all zeros');
+  });
+
+  it('refuses terms no invoice could ever have', async () => {
+    const d0 = deploy();
+    const seller = actor(d0, SELLER_SECRET, SELLER_PIN);
+    const prepared = await prepareInvoice(draft());
+
+    const staging = (terms: Partial<InvoiceTerms>) => () =>
+      stageFor(seller.state, { ...prepared, terms: { ...prepared.terms, ...terms } });
+
+    // None of these can be caught in circuit. A commitment to nonsense verifies
+    // exactly as well as a commitment to a real invoice, so the rule set has to
+    // hold on this side of the trust boundary -- and a mutation run deleted every
+    // one of these checks in turn without the suite noticing.
+    expect(staging({ amount: 0n })).toThrow('amount must be positive');
+    expect(staging({ taxAmount: -1n })).toThrow('tax cannot be negative');
+    expect(staging({ taxAmount: prepared.terms.amount + 1n })).toThrow('tax cannot exceed amount');
+    expect(staging({ currency: new Uint8Array(32) })).toThrow('currency must be set');
+
+    // A zero payout is a key nobody controls. The paying circuits compare their
+    // recipient against it, so an invoice carrying one could only ever be
+    // settled by sending the money nowhere.
+    expect(staging({ sellerPayout: new Uint8Array(32) })).toThrow('sellerPayout must be set');
   });
 
   it('clears staged openings after a call so they cannot be reused', async () => {

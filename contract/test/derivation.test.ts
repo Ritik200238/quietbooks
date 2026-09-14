@@ -117,6 +117,12 @@ describe('integer encoding matches the circuit', () => {
         // payable in is bound by the terms commitment, not disclosable to an
         // auditor field by field.
         tokenType: bytes32(0x04),
+        // Neither payout is disclosable field by field, for the same reason the
+        // token type is not: both are bound by the terms commitment and neither
+        // appears in the fold below, so a circuit that carried one into the root
+        // would disagree with it.
+        sellerPayout: bytes32(0x0a),
+        buyerPayout: bytes32(0x0b),
         orderRef: bytes32(0x05),
         itemsHash: bytes32(0x06),
         memoHash: bytes32(0x07),
@@ -336,11 +342,27 @@ describe('commitments agree with the circuit', () => {
     // present terms naming a different token and still open the commitment the
     // chain recorded at issuance, and the settlement check would be worthless.
     const withOtherToken = { ...base, terms: { ...base.terms, tokenType: bytes32(0x08) } };
+    // Same argument for the payout addresses, and it is what makes them binding.
+    // The paying circuits compare their recipient against terms the caller
+    // supplies; those terms are only trustworthy because they have to reproduce
+    // this commitment first. If a payout fell outside it, a buyer could present
+    // terms naming their own address, open the chain's commitment all the same,
+    // and route the settlement back to themselves.
+    const withOtherSellerPayout = {
+      ...base,
+      terms: { ...base.terms, sellerPayout: bytes32(0x09) },
+    };
+    const withOtherBuyerPayout = {
+      ...base,
+      terms: { ...base.terms, buyerPayout: bytes32(0x0a) },
+    };
 
     expect(toHex(commitTerms(withOtherAmount, prepared.termsSalt))).not.toBe(original);
     expect(toHex(commitTerms(withOtherDue, prepared.termsSalt))).not.toBe(original);
     expect(toHex(commitTerms(withOtherBuyer, prepared.termsSalt))).not.toBe(original);
     expect(toHex(commitTerms(withOtherToken, prepared.termsSalt))).not.toBe(original);
+    expect(toHex(commitTerms(withOtherSellerPayout, prepared.termsSalt))).not.toBe(original);
+    expect(toHex(commitTerms(withOtherBuyerPayout, prepared.termsSalt))).not.toBe(original);
   });
 
   it('produces nine distinct field commitments', async () => {
