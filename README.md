@@ -86,9 +86,16 @@ argument for having one.
 
 | Path | Who calls it | Amount on chain | Binding |
 |---|---|---|---|
-| `settleWithNote` | Buyer | Hidden | The buyer's coin is received and forwarded to the seller in the same call, so the payment and the record are one transaction. The circuit also proves the coin equals the invoiced total |
+| `settleWithNote` | Buyer | Hidden | The buyer's coin is received and forwarded to the seller in the same call, so the payment and the record are one transaction. The circuit proves the coin is the invoiced total, in the invoiced token, addressed to the seller the invoice names |
 | `settleAttested` | Seller | Hidden | The seller vouches for receipt. Used for bank transfers and any rail the contract cannot observe. Only the seller may call it, because the seller is the party who loses by lying |
 | `fundEscrow` → `releaseEscrow` | Buyer | **Public** | The contract holds the coin and releases it on confirmation, refunds after a deadline, or moves it on an arbiter's ruling |
+
+An escrow has exactly three exits and none of them depends on one party staying
+reachable: the buyer releases it, the buyer refunds it after the deadline, or the
+arbiter rules. A dispute nobody resolves falls through to the refund once the
+deadline passes, so no combination of silence leaves the money stuck. See
+**[Paying the wrong person](#paying-the-wrong-person)** for what binds each exit
+to an address.
 
 ---
 
@@ -133,6 +140,31 @@ The counters are written by the contract as invoices move, never supplied by the
 party they describe. That is the difference between a payment record and a claim
 on a website. They are public ledger state, so anyone can read them for any
 party key.
+
+Getting there took two passes. Every settlement path originally set the on-time
+flag from a `settledAt` the caller passed in — which in `settleAttested` means
+the seller marked their own punctuality, and in the others means the payer marked
+the seller's. All four paths now read the block clock instead. The dispute path
+was the last holdout, and subtler: it wrote the public settlement record from the
+block and the counter beside it from the date the arbiter typed, so the two could
+disagree about the same settlement and the number a counterparty is actually
+shown was the one a caller chose.
+
+### What the counters still cannot tell you
+
+They count invoices, and an invoice needs two party keys. A party key is a
+domain-separated hash of a wallet secret and a PIN, and one wallet can make as
+many as it likes. So one person can issue an invoice from key A to key B and
+attest it settled, and A's record gains a settled invoice that nothing in the
+world was paid for.
+
+The contract cannot detect this and no amount of care in the circuit would fix
+it, because both keys are genuine and every rule holds. It is the same shape as
+any pseudonymous reputation system: counts are only worth what the identities
+behind them cost, and here they cost nothing. What makes the record useful is a
+counterparty who already knows which key belongs to whom — which for B2B
+invoicing is the normal case, since you know who you are trading with. Reading it
+as a public credit score is the use it does not support.
 
 A circuit that proves a threshold over them — "at least twenty settled, at least
 eighteen on time, no disputes lost" — while disclosing none of the counts is
@@ -437,6 +469,70 @@ the second question.
 
 ---
 
+## Paying the wrong person
+
+The same shape of bug, one layer down, and the one that took longest to see.
+
+Every paying circuit took the recipient as an argument. The value was checked,
+the token was checked, and where the money actually went was whatever the caller
+typed. `settleWithNote` is called by the buyer; `releaseEscrow` is called by the
+buyer; `resolveDispute` is called by the arbiter. In each case the person
+choosing the address is not the person being paid.
+
+So a buyer could settle an invoice by paying themselves and the contract would
+record it as settled, increment the seller's reliability, and write a settlement
+digest an auditor could verify. Every number in that record was true. The money
+had gone the wrong way.
+
+The invoice now names both addresses, inside the terms commitment:
+
+```compact
+sellerPayout: Bytes<32>,   // where the seller is paid
+buyerPayout: Bytes<32>,    // where the buyer is paid on a dispute
+```
+
+`settleWithNote` and `releaseEscrow` refuse any recipient but `sellerPayout`.
+`resolveDispute` binds the address to the ruling — a verdict for the seller can
+only pay `sellerPayout`, a verdict for the buyer only `buyerPayout` — so an
+arbiter can no longer rule for one party and send the money to a third.
+
+`refundEscrow` is the deliberate exception. The caller has proven they are the
+buyer and the money is going back to the buyer, so the only person a free choice
+of address can hurt is the person making it. Binding it would also mean an
+invoice issued without a buyer address could never be refunded, which turns a
+deadline into a trap.
+
+### The rule that followed from it
+
+Binding the arbiter's payment made a second problem visible. The seller writes
+the terms. So a seller could name an arbiter and leave the buyer's address
+empty, and a ruling for the buyer would send the escrow to the zero key, where it
+is gone; or name their own address for both sides, and a ruling for the buyer
+would pay the seller. Either way the arbiter is unable to rule against the party
+who appointed them, which is the one thing an arbiter exists to do.
+
+`issueInvoice` now refuses an invoice that names an arbiter without a distinct,
+non-empty buyer address. Both front ends check the same rule in the form, so it
+costs a sentence rather than a failed proof.
+
+### Does the payout address end up on the chain?
+
+No, and this is worth stating because the natural assumption is yes.
+
+A `disclose()` is required to pass the address to `sendShielded`, and a reader
+who knows what `disclose()` means will reasonably expect the address to appear in
+the transaction. It does not. In the compiled contract the recipient reaches
+`createZswapOutput`, which pushes to `privateTranscriptOutputs`; what lands in
+the public transcript is `coinCommitment(output, recipient)` — a hash. The
+address is an input to something public, not a public output.
+
+So binding the payout costs no privacy. What it costs is that an arbiter now has
+to hold the invoice openings to prove the binding, which means the arbiter sees
+the amount. That is a disclosure to one named party the seller chose, not to the
+chain, and it buys a dispute process whose outcome cannot be redirected.
+
+---
+
 ## Testing
 
 | Suite | What it proves |
@@ -446,13 +542,49 @@ the second question.
 | `escrow.test.ts` | Funding, release, refund deadlines, disputes, arbitration |
 | `audit.test.ts` | Grants, scope coverage, expiry, revocation, the reliability record, admin |
 | `audit-envelope.test.ts` | Envelope crypto and all eight validator checks |
+| `hostile-witness.test.ts` | What the contract does when the prover lies |
 
-One test is worth calling out. An earlier version of the derivation suite
-compared an encoding helper against itself, and passed while the helper encoded
-integers in the wrong byte order — which would have shipped audit envelopes no
-auditor could verify. It now folds our own field commitments independently and
-compares the result to the compiled circuit's root, so it cannot pass vacuously.
-Reintroducing the bug fails seven tests.
+234 tests, all passing, no Docker required: they drive the compiled contract
+in-process through `@midnight-ntwrk/compact-runtime`, so a full run takes about
+eleven seconds.
+
+### Tests that pass for the wrong reason
+
+Two are worth calling out, because in both cases a green suite was hiding a real
+defect.
+
+An earlier version of the derivation suite compared an encoding helper against
+itself. It passed while the helper encoded integers in the wrong byte order,
+which would have shipped audit envelopes no auditor could verify. It now folds
+our own field commitments independently and compares the result to the compiled
+circuit's root, so it cannot pass vacuously. Reintroducing the bug fails seven
+tests.
+
+The second was worse, and it is why `hostile-witness.test.ts` exists. Every
+other suite runs the honest witness implementation from `contract/src/witnesses.ts`
+— so every value the contract saw came from software trying to be correct, even
+in the tests that assert a refusal. A witness is not like that. It is a private
+input the caller's own machine produces, the chain never validates it, and an
+attacker ships their own. Reverting the most serious fix in the contract, the
+one that stopped `settleWithNote` reading the terms witness twice, left all 215
+tests of the time green. The attack it reopens settles a six-million invoice for
+one unit.
+
+### Mutation testing
+
+The way that was found, and the way the rest are kept honest: revert a fix,
+recompile, and check the suite actually goes red.
+
+`compact compile --skip-zk` produces a `contract/index.js` byte-identical to the
+shipped build, so a mutant compiles in eight seconds and the whole sweep runs in
+minutes. Sixteen reverted fixes, sixteen failing tests — including the double
+witness read, which now fails on a test that asserts the prover is asked exactly
+once, rather than on one consequence of asking twice.
+
+One mutant can no longer be written at all: `fundEscrow` used to compare its
+deadline against a `fundedAt` the same caller supplied, and that argument has
+been deleted rather than checked. A bug you cannot express is better than a bug
+you test for.
 
 ---
 
@@ -466,11 +598,12 @@ Stated plainly, because a roadmap that only lists wins is not a roadmap.
   so every invoice they create is denominated in the native token. The
   enforcement is real and tested; the choice is not yet offered. See **[Paying in
   the wrong token](#paying-in-the-wrong-token)**.
-- **Paying a seller you have never paid before needs one thing out of band.**
-  Building a shielded output means encrypting the coin to its recipient, so the
-  payer needs the seller's Zswap *encryption* key as well as the coin public key
-  that names them. The API takes it; the invoice does not carry it. Until an
-  invoice carries a payment address, the seller has to send both.
+- **The end-to-end run uses one wallet for every role.** Seller, buyer and
+  arbiter are three PINs of the same wallet, which is a real test of the
+  authorisation rules and a poor test of payment: a payment to the wrong party is
+  structurally invisible when every party is you. The circuit tests cover the
+  binding and the mutation sweep confirms they bite, but a genuine two-wallet run
+  against the local node is not built.
 - The threshold proof over the reliability counters is written and was deployed
   in an earlier build, but does not fit in the current deploy alongside escrow
   and disputes. The counters are still kept. See **[Why twelve entry
