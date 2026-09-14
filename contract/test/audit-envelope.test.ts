@@ -718,6 +718,38 @@ const sealText = async (
   return sealed(next);
 };
 
+describe('what a passing report hands back', () => {
+  it('carries the fields it verified, and only those', async () => {
+    // The point of the format is that an auditor reads a number. Until this
+    // existed the only way to read one was `openAuditEnvelope`, which decrypts
+    // without a grant, an anchor or a clock -- so any screen that showed a field
+    // was using the unchecked path, and containment was advisory by
+    // construction.
+    const f = await fixture({ scopes: scopesFrom(['amount', 'memo']), granted: allScopes() });
+    const report = await validate(f);
+    expect(report.ok).toBe(true);
+    expect(Object.keys(report.disclosed ?? {}).sort()).toStrictEqual(['amount', 'memo']);
+    const prepared = await prepareInvoice(draft());
+    expect(report.disclosed?.amount?.plaintext).toBe(prepared.terms.amount.toString());
+    // A hashed field verifies without a plaintext, which is what granting one is
+    // for: the auditor confirms the memo they were shown out of band is the one
+    // the invoice committed to, and the memo was never on chain.
+    expect(report.disclosed?.memo?.plaintext).not.toBe(null);
+    expect(report.disclosed?.amount?.commitment).toBe(
+      (await openAuditEnvelope(f.envelope, f.auditKey)).disclosed.amount?.value,
+    );
+  });
+
+  it('hands back nothing when a check fails', async () => {
+    // A caller cannot show a field it was not given, which is the only safe
+    // reading of a failed envelope.
+    const f = await fixture();
+    const report = await validate(f, { grant: { ...f.grant, revoked: true } });
+    expect(report.ok).toBe(false);
+    expect(report.disclosed).toBeUndefined();
+  });
+});
+
 describe('the two copies of the grant rule', () => {
   /**
    * `grantCovers` states the rule once; `validateAuditEnvelope` re-states its
