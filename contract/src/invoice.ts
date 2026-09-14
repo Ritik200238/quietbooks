@@ -78,6 +78,15 @@ export const hashLineItems = (items: readonly LineItem[]): Promise<Uint8Array> =
 /** What a seller fills in. Plain application data, no crypto. */
 export type InvoiceDraft = {
   readonly currency: string;
+  /**
+   * The shielded token the invoice is payable in, as Zswap's own colour.
+   *
+   * Distinct from `currency`, which is a label a person reads. The contract
+   * compares a payment against this and refuses a coin of any other token, so
+   * an invoice denominated in one thing cannot be settled with another. Left
+   * unset it is the native shielded token.
+   */
+  readonly tokenType?: Uint8Array;
   readonly lineItems: readonly LineItem[];
   /** Tax on top of the line-item subtotal, in the smallest unit. */
   readonly taxAmount: bigint;
@@ -138,6 +147,7 @@ export const prepareInvoice = async (draft: InvoiceDraft): Promise<PreparedInvoi
     amount,
     taxAmount: draft.taxAmount,
     currency: currencyCode(draft.currency),
+    tokenType: draft.tokenType ?? NATIVE_SHIELDED_TOKEN,
     orderRef: draft.orderRef.length === 0 ? ZERO32 : await sha256(draft.orderRef),
     itemsHash: await hashLineItems(draft.lineItems),
     memoHash: draft.memo.length === 0 ? ZERO32 : await sha256(draft.memo),
@@ -156,6 +166,15 @@ export const prepareInvoice = async (draft: InvoiceDraft): Promise<PreparedInvoi
     },
   };
 };
+
+/**
+ * Zswap's native shielded token, which is what an all-zero colour means.
+ *
+ * Named because `ZERO32` appears in this file for several unrelated reasons --
+ * an absent memo, an absent order reference -- and a reader should not have to
+ * work out which zero is which.
+ */
+export const NATIVE_SHIELDED_TOKEN: Uint8Array = ZERO32;
 
 /** The grand total a buyer actually pays: principal plus tax. */
 export const payableTotal = (terms: InvoiceTerms): bigint => terms.amount + terms.taxAmount;

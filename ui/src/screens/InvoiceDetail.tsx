@@ -27,7 +27,6 @@ import {
   scopeNames,
   sha256,
   toHex,
-  ZERO32,
 } from '@quietbooks/contract';
 
 import { ActionCard } from '../components/ActionCard';
@@ -78,7 +77,14 @@ const SettleWithNote = ({ api, view, paused, onDone }: ActionProps): JSX.Element
   const action = useAction(async () => {
     // The nonce identifies this one coin. Fresh every time: reusing one names a
     // coin the ledger already knows about.
-    const coin = { nonce: randomBytes32(), color: ZERO32, value: view.payable! };
+    // The token comes from the invoice. The circuit refuses a coin of any other
+    // colour, so paying in a default would simply fail for invoices that are not
+    // denominated in it.
+    const coin = {
+      nonce: randomBytes32(),
+      color: view.stored!.terms.tokenType,
+      value: view.payable!,
+    };
     await api.settleWithNote(view.invoiceId, coin, fromHex(normaliseHex(payout)));
     await onDone();
   }, PROVING_NOTE);

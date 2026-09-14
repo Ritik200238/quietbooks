@@ -8,7 +8,7 @@
 // is a platform constraint, not an oversight, and an operator must not be able
 // to reach `fundEscrow` without having been told.
 
-import { daysFromNow, randomBytes32, toHex, ZERO32 } from '@quietbooks/contract';
+import { daysFromNow, randomBytes32, toHex } from '@quietbooks/contract';
 
 import type { AppContext } from '../context.js';
 import { formatTimestamp, groupDigits, heading, out, renderFields } from '../format.js';
@@ -45,21 +45,26 @@ const fundEscrow = async (context: AppContext): Promise<void> => {
     out('  Nothing was sent.');
     return;
   }
+  if (view.stored === undefined) {
+    out('  This wallet cannot open that invoice, so it cannot know which token to lock.');
+    out('  Ask the seller to share its record first.');
+    return;
+  }
 
   const value = await context.ask.bigint('  Amount to lock, in the token\'s smallest unit', {
     min: 1n,
   });
-  const color = await context.ask.hex32(
-    '  Token colour (64 hex, blank for the native shielded token)',
-    { optional: true, allowZero: true },
-  );
   const deadlineDays = await context.ask.days('  Escrow deadline in how many days?', 14);
   const deadline = daysFromNow(deadlineDays);
 
-  // The nonce is generated rather than asked for. It identifies this particular
-  // coin, so reusing one from an earlier escrow would produce a coin the ledger
-  // already knows about and the transaction would be refused.
-  const coin = { nonce: randomBytes32(), color: color ?? ZERO32, value };
+  // The nonce is generated rather than asked for: it identifies this particular
+  // coin, and reusing one would name a coin the ledger already knows about.
+  //
+  // The token is not asked for either. An escrow has to hold the token its
+  // invoice is payable in, because releasing it settles that invoice and the
+  // circuit refuses anything else, so a prompt would only offer a way to be
+  // refused.
+  const coin = { nonce: randomBytes32(), color: view.stored.terms.tokenType, value };
 
   out('');
   out(

@@ -396,7 +396,7 @@ const main = async (): Promise<void> => {
     // see that, because they never build a transaction.
     const payment = {
       nonce: randomBytes32(),
-      color: ZERO32,
+      color: prepared.terms.tokenType,
       value: payableTotal(prepared.terms),
     };
     const sellerPayout = encodeCoinPublicKey(walletProvider.getCoinPublicKey());
@@ -522,7 +522,11 @@ const main = async (): Promise<void> => {
 
     // The nonce identifies this particular coin. Reusing one would name a coin
     // the ledger already knows about, and the transaction would be refused.
-    const escrowCoin = { nonce: randomBytes32(), color: ZERO32, value: 2_500_000n };
+    const escrowCoin = {
+      nonce: randomBytes32(),
+      color: escrowPrepared.terms.tokenType,
+      value: 2_500_000n,
+    };
     const escrowDeadline = nowSeconds() + 14n * 86_400n;
 
     await step('the buyer funds escrow with a real shielded coin', () =>

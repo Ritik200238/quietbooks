@@ -783,6 +783,7 @@ type SerialisedInvoice = {
     amount: string;
     taxAmount: string;
     currency: string;
+    tokenType: string;
     orderRef: string;
     itemsHash: string;
     memoHash: string;
@@ -803,6 +804,7 @@ const serialiseStored = (stored: StoredInvoice): SerialisedInvoice => ({
     amount: stored.terms.amount.toString(),
     taxAmount: stored.terms.taxAmount.toString(),
     currency: toHex(stored.terms.currency),
+    tokenType: toHex(stored.terms.tokenType),
     orderRef: toHex(stored.terms.orderRef),
     itemsHash: toHex(stored.terms.itemsHash),
     memoHash: toHex(stored.terms.memoHash),
@@ -817,6 +819,19 @@ const serialiseStored = (stored: StoredInvoice): SerialisedInvoice => ({
   pin: stored.pin.toString(),
 });
 
+/** Read a field a shared record cannot be understood without. */
+const requireField = (value: unknown, name: string): string => {
+  if (typeof value !== 'string') {
+    throw new QuietBooksError(
+      `shared invoice is missing ${name}. It was written by an older version of ` +
+        'QuietBooks, whose terms were committed to differently, so it cannot be ' +
+        'opened here. Ask the counterparty to export it again.',
+      'importInvoice',
+    );
+  }
+  return value;
+};
+
 const deserialiseStored = (value: unknown): StoredInvoice => {
   const raw = value as SerialisedInvoice;
   if (typeof raw?.invoiceId !== 'string' || !Array.isArray(raw?.fieldSalts)) {
@@ -828,6 +843,15 @@ const deserialiseStored = (value: unknown): StoredInvoice => {
       amount: BigInt(raw.terms.amount),
       taxAmount: BigInt(raw.terms.taxAmount),
       currency: fromHex(raw.terms.currency),
+      // Required, and refused loudly when absent.
+      //
+      // Substituting the native token here would be worse than failing: a
+      // record shared before this field existed was committed to under rules
+      // version 1, whose terms encoding had no token type at all, so its
+      // commitment cannot open against version 2 whatever is filled in. The
+      // import would succeed and the first settlement would fail deep inside a
+      // circuit with a message about terms not opening.
+      tokenType: fromHex(requireField(raw.terms?.tokenType, 'terms.tokenType')),
       orderRef: fromHex(raw.terms.orderRef),
       itemsHash: fromHex(raw.terms.itemsHash),
       memoHash: fromHex(raw.terms.memoHash),
