@@ -78,9 +78,13 @@ export const SessionProvider = ({ children }: { children: ReactNode }): JSX.Elem
   const [state, setState] = useState<QuietBooksDerivedState | undefined>(undefined);
   const [streamError, setStreamError] = useState<string | undefined>(undefined);
   const [refreshing, setRefreshing] = useState(false);
-  // Bumping this resubscribes to `state$`. The API captures private state when a
-  // subscription is created, so after issuing an invoice a fresh subscription is
-  // what makes the new record readable rather than showing as somebody else's.
+  // Bumping this resubscribes to `state$`.
+  //
+  // The API re-reads private state on every ledger tick, so a new invoice
+  // becomes readable on the next tick without this. What it is actually for is
+  // the moment a tick is not coming: after an action that changes nothing on
+  // chain, or while the indexer is between blocks, resubscribing gets the
+  // current answer immediately rather than leaving the screen a tick behind.
   const [epoch, setEpoch] = useState(0);
   const connecting = useRef(false);
 

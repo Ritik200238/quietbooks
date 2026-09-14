@@ -8,7 +8,14 @@
 // design is built on. If the operator loses it, the grant is revoked and a new
 // one is issued .. which is the intended failure mode.
 
-import { daysFromNow, randomBytes32, SCOPES, sha256, toHex, type ScopeVector } from '@quietbooks/contract';
+import {
+  auditKeyHash,
+  daysFromNow,
+  deriveAuditKey,
+  SCOPES,
+  toHex,
+  type ScopeVector,
+} from '@quietbooks/contract';
 
 import type { AppContext } from '../context.js';
 import { formatTimestamp, heading, out, renderFields } from '../format.js';
@@ -85,13 +92,14 @@ const grantAudit = async (context: AppContext): Promise<void> => {
   const expiryDays = await context.ask.days('  Grant expires in how many days?', 30);
   const expiresAt = daysFromNow(expiryDays);
 
-  // sha256 of the key is exactly what `auditKeyHash` in the contract package's
-  // audit module computes, and what `validateAuditEnvelope` checks a key against.
-  // That module is not re-exported from the package entry point, so the same
-  // derivation is spelled out here rather than reached for across a package
-  // boundary that is not open.
-  const auditKey = randomBytes32();
-  const keyHash = await sha256(auditKey);
+  // `auditKeyHash` from the contract package, rather than sha256 spelled out
+  // here. It was spelled out, under a comment saying the audit module was not
+  // re-exported from the package entry point; `contract/src/index.ts` has
+  // `export * from './audit.js'`, so it was, and two copies of one derivation
+  // were a drift waiting to happen -- a change to the hash there would have left
+  // every grant this CLI wrote unopenable, with nothing to catch it.
+  const auditKey = deriveAuditKey();
+  const keyHash = await auditKeyHash(auditKey);
   const disclosed = SCOPES.filter((_, index) => scopes[index]);
 
   out('');
