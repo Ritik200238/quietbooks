@@ -254,31 +254,32 @@ PASS  build wallet from the genesis seed
 PASS  wallet syncs with the chain
 PASS  wallet holds NIGHT
 PASS  NIGHT is registered and DUST is spendable
-PASS  deploy the contract with real ZK proofs                  (25.6s)
+PASS  deploy the contract with real ZK proofs                  (20.9s)
 PASS  indexer returns the deployed state
-PASS  issue an invoice                                         (145.1s)
+PASS  issue an invoice                                         (102.5s)
 PASS  the chain shows the invoice and hides its amount
-PASS  the buyer pays the seller and settles in one transaction (161.7s)
+PASS  the buyer pays the seller and settles in one transaction (95.0s)
 PASS  the chain shows the settlement and still hides the amount
-PASS  grant an auditor three fields                            (27.5s)
+PASS  grant an auditor three fields                            (23.2s)
 PASS  the chain records the grant exactly as given
-PASS  revoke the audit grant                                   (31.3s)
+PASS  revoke the audit grant                                   (25.1s)
 PASS  the chain shows the grant revoked
-PASS  issue a second invoice to be escrowed                    (199.0s)
-PASS  the buyer funds escrow with a real shielded coin         (150.1s)
+PASS  issue a second invoice to be escrowed                    (113.8s)
+PASS  the buyer funds escrow with a real shielded coin         (71.9s)
 PASS  the contract holds the coin, and its value is public
 PASS  the buyer opens the deployment through the API
-PASS  the buyer releases the escrow to the seller              (122.6s)
+PASS  the buyer releases the escrow to the seller              (59.2s)
 PASS  the chain shows the escrow paid out and the vault emptied
 PASS  a party who has never seen this deployment can join it
 
 21/21 steps passed
 ```
 
-The times are real, from one run on a laptop that was compiling other things at
-the same time; treat them as an upper bound rather than a benchmark. What they
-are useful for is the shape: proving dominates, and a settlement costs about
-what an issuance does.
+The times are real, from one run on an ordinary laptop with nothing else
+competing for it. They are not a benchmark — an earlier run with a compile going
+alongside was two to three times slower throughout. What they are useful for is
+the shape: proving dominates everything else, and a settlement costs about what
+an issuance does.
 Each transaction also prints its cost against every block limit before it is
 submitted, because a transaction that exceeds one is refused by the node with a
 message that names neither the limit nor the margin. See **[Why twelve entry
