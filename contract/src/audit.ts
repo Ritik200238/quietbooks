@@ -50,13 +50,20 @@
 // -------------
 // The 32-byte value each field commits to is produced here with the runtime's
 // own `convertFieldToBytes`, which is the function the compiled circuit calls
-// for `x as Field as Bytes<32>`. It is little-endian. `bigintToBytes32` in
-// `invoice.ts` encodes big-endian, so `fieldValues`/`fieldCommitments` there do
-// not reproduce the amount, tax and due-date commitments the circuit folds into
-// the field root; this module deliberately does not use them. `foldFieldRoot`
-// below is asserted against the compiled `commitFieldRoot` in the test suite, so
-// a future change to either side that breaks the agreement fails a test rather
-// than producing envelopes no auditor can check.
+// for `x as Field as Bytes<32>`.
+//
+// This note used to say that `bigintToBytes32` in `invoice.ts` encoded
+// big-endian and therefore could not reproduce these commitments, and that the
+// duplication below existed to avoid it. That was true once and is not now:
+// `invoice.ts` calls the same `convertFieldToBytes`, all nine values come out
+// byte-identical, and a maintainer trusting the old note would have concluded
+// the wrong thing in either direction. The duplication stays because this module
+// is the one an auditor runs and it should not depend on the issuing path, not
+// because the two disagree.
+//
+// `foldFieldRoot` below is asserted against the compiled `commitFieldRoot` in
+// the test suite, so a future change to either side that breaks the agreement
+// fails a test rather than producing envelopes no auditor can check.
 
 import {
   CompactTypeBytes,
@@ -486,21 +493,18 @@ const plaintextMismatch = async (
 // ---------------------------------------------------------------------------
 
 /**
- * A fresh audit key.
- *
- * One key per grant. Reusing a key across invoices would let an auditor granted
- * one invoice open the envelope for another, which the chain's per-invoice grant
- * would then have no way to prevent.
- */
-/**
  * Is this grant usable right now, for exactly these fields?
  *
  * The contract enforces what may be *granted*; nothing on chain enforces what a
  * reader may *open*, because opening happens off chain against an encrypted
- * envelope. This is that rule, and it is deliberately the only copy of it: an
- * earlier version also lived in the contract as an entry point, which cost a
- * verifier key in every deploy transaction, was called by nothing, and gave two
- * implementations a chance to drift apart.
+ * envelope.
+ *
+ * `validateAuditEnvelope` does not call it. The checks there are reported one
+ * per line with their own messages, so they re-state these clauses inline; the
+ * two are compared clause by clause in the test suite rather than left to
+ * agree by inspection. An earlier version of this rule also lived in the
+ * contract as an entry point, which cost a verifier key in every deploy
+ * transaction and was called by nothing.
  *
  * The clauses mirror the chain's own semantics:
  *
@@ -525,6 +529,13 @@ export const grantCovers = (
   return requested.every((on, index) => !on || grant.scopes[index]);
 };
 
+/**
+ * A fresh audit key.
+ *
+ * One key per grant. Reusing a key across invoices would let an auditor granted
+ * one invoice open the envelope for another, which the chain's per-invoice grant
+ * would then have no way to prevent.
+ */
 export const deriveAuditKey = (): Uint8Array => randomBytes32();
 
 /** The value the grant pins on chain. The key itself never goes there. */
@@ -783,6 +794,29 @@ const PAYLOAD_KEYS = [
 
 const DISCLOSED_FIELD_KEYS = ['value', 'salt', 'plaintext'] as const;
 
+/**
+ * Hex with exactly one spelling: lowercase, unprefixed, whole bytes.
+ *
+ * `fromHex` accepts a `0x` prefix and either case, so `AB`, `ab` and `0xab` all
+ * decode to the same byte. Inside the payload that is about sixty-five free bits
+ * per field, across eleven fields, which two colluding parties could use as a
+ * side channel -- and, more to the point, it means `integrity.payloadHash` does
+ * not identify a unique disclosure: many byte-distinct payloads would be equally
+ * valid for one envelope. The canonical-form check on the payload text cannot
+ * catch this, because re-serialising a string does not change what is inside it.
+ */
+const CANONICAL_HEX = /^(?:[0-9a-f]{2})+$/;
+
+const asHex = (value: unknown, what: string): string => {
+  const text = asString(value, what);
+  if (!CANONICAL_HEX.test(text)) {
+    throw new AuditEnvelopeError(
+      `${what} is not canonical hex .. it must be lowercase, unprefixed and a whole number of bytes`,
+    );
+  }
+  return text;
+};
+
 const parsePayload = (value: unknown): AuditPayload => {
   const root = asRecord(value, 'the payload');
   rejectUnknown(root, PAYLOAD_KEYS, 'the payload');
@@ -791,7 +825,7 @@ const parsePayload = (value: unknown): AuditPayload => {
   rejectUnknown(commitmentsRaw, SCOPES, 'payload.commitments');
   const commitments = {} as Record<ScopeName, string>;
   for (const scope of SCOPES) {
-    commitments[scope] = asString(commitmentsRaw[scope], `payload.commitments.${scope}`);
+    commitments[scope] = asHex(commitmentsRaw[scope], `payload.commitments.${scope}`);
   }
 
   const disclosedRaw = asRecord(root.disclosed, 'payload.disclosed');
@@ -803,8 +837,8 @@ const parsePayload = (value: unknown): AuditPayload => {
     const field = asRecord(disclosedRaw[key], `payload.disclosed.${key}`);
     rejectUnknown(field, DISCLOSED_FIELD_KEYS, `payload.disclosed.${key}`);
     disclosed[key] = {
-      value: asString(field.value, `payload.disclosed.${key}.value`),
-      salt: asString(field.salt, `payload.disclosed.${key}.salt`),
+      value: asHex(field.value, `payload.disclosed.${key}.value`),
+      salt: asHex(field.salt, `payload.disclosed.${key}.salt`),
       plaintext:
         field.plaintext === null
           ? null
@@ -821,8 +855,8 @@ const parsePayload = (value: unknown): AuditPayload => {
     scopeMask: root.scopeMask,
     disclosed,
     commitments,
-    fieldRoot: asString(root.fieldRoot, 'payload.fieldRoot'),
-    termsCommitment: asString(root.termsCommitment, 'payload.termsCommitment'),
+    fieldRoot: asHex(root.fieldRoot, 'payload.fieldRoot'),
+    termsCommitment: asHex(root.termsCommitment, 'payload.termsCommitment'),
   };
 };
 
