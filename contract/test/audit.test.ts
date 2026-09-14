@@ -23,16 +23,19 @@ import {
   deploy,
   draft,
   expectThrows,
+  BUYER_PAYOUT,
   INSTANCE_SALT,
   issue,
   led,
-  pk,
+  payoutTo,
+  SELLER_PAYOUT,
   SELLER_PIN,
   SELLER_SECRET,
   share,
   stageFor,
   STRANGER_SECRET,
   T0,
+  total,
   type Actor,
   type Deployed,
   type IssuedInvoice,
@@ -51,8 +54,9 @@ const OTHER_AUDIT_KEY = bytes32(0xb1);
 
 const EXPIRY = T0 + 30n * DAY;
 
-/** Where the buyer sends the payment. Nothing here asserts on it. */
-const SELLER_PAYOUT = pk(0x77);
+/** The addresses the fixture invoice names, shaped as the circuits take them. */
+const TO_SELLER = payoutTo(SELLER_PAYOUT);
+const TO_BUYER = payoutTo(BUYER_PAYOUT);
 
 /** A deployment carrying one open invoice, and the parties to it. */
 const anInvoice = async () => {
@@ -113,7 +117,7 @@ const settle = (d: Deployed, issued: IssuedInvoice, buyer: Actor, at: bigint): D
       issued.invoiceId,
       buyer.pin,
       coin(payableTotal(issued.prepared.terms)),
-      SELLER_PAYOUT,
+      TO_SELLER,
       at,
     ),
   );
@@ -194,6 +198,32 @@ describe('granting an auditor sight of an invoice', () => {
       () => grant(d, invoiceId, seller, allScopes(), { expiresAt: T0 - DAY, grantedAt: T0 }),
       'grant must expire in the future',
     );
+  });
+
+  it('refuses a window already past, even when it opens after the claimed grant time', async () => {
+    const { d, invoiceId, seller } = await anInvoice();
+
+    // `expiresAt > grantedAt` by a fortnight, which is all the old rule asked
+    // for, and both are behind the block. Two arguments the same caller chose
+    // cannot establish that a window is open; only the chain's clock can. The
+    // off-chain validator was meanwhile telling readers the contract enforced
+    // this, so a grant expired on arrival looked live to anyone reading the code.
+    expectThrows(
+      () =>
+        grant(d, invoiceId, seller, allScopes(), {
+          expiresAt: T0 - 14n * DAY,
+          grantedAt: T0 - 28n * DAY,
+        }),
+      'grant must expire in the future',
+    );
+  });
+
+  it('accepts a window one second ahead of the block', async () => {
+    // The far side of the boundary, never probed before: the rule is strictly
+    // greater, so a single second is a valid window and the grant is written.
+    const { d: issued, invoiceId, seller } = await anInvoice();
+    const d = grant(issued, invoiceId, seller, allScopes(), { expiresAt: T0 + 1n });
+    expect(led(d).auditGrants.lookup(invoiceId).expiresAt).toBe(T0 + 1n);
   });
 
   it('refuses to grant while the contract is paused', async () => {
@@ -404,9 +434,8 @@ describe('the reliability record', () => {
         ctx(issued.d, buyerState, T0),
         issued.invoiceId,
         buyer.pin,
-        coin(1_000n),
+        coin(total(issued.prepared)),
         T0 + 10n * DAY,
-        T0,
       ),
     );
     const disputed = advance(
@@ -417,14 +446,15 @@ describe('the reliability record', () => {
         buyer.pin,
       ),
     );
+    const arbiterState = stageFor(share(arbiter.state, issued.stored), issued.prepared);
     const d = advance(
       disputed,
       disputed.contract.impureCircuits.resolveDispute(
-        ctx(disputed, arbiter.state),
+        ctx(disputed, arbiterState),
         issued.invoiceId,
         arbiter.pin,
         false,
-        pk(0x01),
+        TO_BUYER,
         T0 + DAY,
       ),
     );

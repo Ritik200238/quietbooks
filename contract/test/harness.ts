@@ -21,6 +21,7 @@ import {
   Contract,
   ledger,
   pureCircuits,
+  type InvoiceTerms,
   type Ledger,
 } from '../build/contract/index.js';
 
@@ -35,6 +36,7 @@ import {
 
 import {
   NATIVE_SHIELDED_TOKEN,
+  payableTotal,
   prepareInvoice,
   storedInvoiceFrom,
   type InvoiceDraft,
@@ -65,6 +67,23 @@ export const STRANGER_SECRET = bytes32(0x44);
 export const SELLER_PIN = 1n;
 export const BUYER_PIN = 2n;
 export const ARBITER_PIN = 3n;
+
+/**
+ * Where each side of the fixture invoice is paid, as Zswap coin public keys.
+ *
+ * These go into the terms at issuance and every paying circuit compares its
+ * recipient against them, so a test that expects a payment to be refused passes
+ * a different constant from this set rather than an anonymous byte fill. The
+ * name at the call site is then what says which rule is under test.
+ */
+export const SELLER_PAYOUT = bytes32(0x77);
+export const BUYER_PAYOUT = bytes32(0xb2);
+
+/** An address on neither side of the invoice. Nothing may ever be sent here. */
+export const STRANGER_PAYOUT = bytes32(0x99);
+
+/** One of the keys above, shaped as the `ZswapCoinPublicKey` a circuit takes. */
+export const payoutTo = (key: Uint8Array): { readonly bytes: Uint8Array } => ({ bytes: key });
 
 /** Fixed clock so time-dependent assertions read the same on every machine. */
 export const T0 = 1_760_000_000n;
@@ -174,11 +193,27 @@ export const draft = (overrides: Partial<InvoiceDraft> = {}): InvoiceDraft => ({
     { description: 'On-call hours', quantity: 12n, unitPrice: 125_000n },
   ],
   taxAmount: 550_000n,
+  sellerPayout: SELLER_PAYOUT,
+  // Carried on every fixture invoice, not only the disputed ones: an invoice
+  // issued without it cannot have a dispute resolved in the buyer's favour,
+  // because the arbiter has no address to send the escrow to.
+  buyerPayout: BUYER_PAYOUT,
   memo: 'Net 30. Wire to the account on file.',
   orderRef: 'PO-2026-0184',
   dueDate: T0 + 30n * DAY,
   ...overrides,
 });
+
+/**
+ * What an invoice costs to settle or to escrow: principal plus tax.
+ *
+ * Read off the prepared terms rather than written out as a number. The suite
+ * used to hold a constant `ESCROW_VALUE` of 4,550,000 against a 6,050,000
+ * invoice and assert that funding succeeded, so the fixture encoded the missing
+ * total check as correct behaviour. Deriving it means a change to the draft's
+ * line items cannot silently reopen that.
+ */
+export const total = (prepared: PreparedInvoice): bigint => payableTotal(prepared.terms);
 
 export type IssuedInvoice = {
   readonly d: Deployed;
@@ -217,12 +252,20 @@ export const issue = async (
   options: {
     arbiterKey?: Uint8Array;
     draft?: Partial<InvoiceDraft>;
+    /**
+     * Issue against openings prepared earlier instead of drawing fresh ones.
+     *
+     * The only way to give two invoices on two deployments the same identifier,
+     * which is what isolating the settlement salt from everything else the
+     * receipt commits to requires.
+     */
+    prepared?: PreparedInvoice;
     issuedAt?: bigint;
     time?: bigint;
   } = {},
 ): Promise<IssuedInvoice> => {
   const theDraft = draft(options.draft);
-  const prepared = await prepareInvoice(theDraft);
+  const prepared = options.prepared ?? (await prepareInvoice(theDraft));
   const issuedAt = options.issuedAt ?? T0;
 
   const staged = stageFor(seller.state, prepared);
@@ -303,4 +346,66 @@ export const coin = (
   value,
 });
 
-export const pk = (fill: number) => ({ bytes: bytes32(fill) });
+// ---------------------------------------------------------------------------
+// Hostile provers
+// ---------------------------------------------------------------------------
+
+/**
+ * The same deployment, driven by a prover that does not tell the truth.
+ *
+ * Every test above this line runs the honest witness implementation from
+ * `src/witnesses.ts`, so no test above this line has ever seen the contract
+ * face a lie. That is a gap, not a detail: a witness is not an input the chain
+ * validates, it is whatever the caller's local software chooses to return, and
+ * `src/witnesses.ts` is only the copy that ships. An attacker edits it, or
+ * writes their own. Every guarantee this contract makes about hidden values
+ * rests on assertions that hold when the prover is adversarial, and the only
+ * way to test those assertions is to be adversarial.
+ *
+ * The overrides are merged over the honest set, so a test replaces exactly the
+ * witness it is attacking and the rest behave normally.
+ */
+export const withProver = (
+  d: Deployed,
+  overrides: Partial<typeof witnesses>,
+): Deployed => ({
+  ...d,
+  contract: new Contract<QuietBooksPrivateState>({ ...witnesses, ...overrides }),
+});
+
+/** What a lying `invoiceTerms` did: how many times it was asked, and for what. */
+export type ProverLog = { reads: number };
+
+/**
+ * A prover whose `invoiceTerms` answers differently depending on how often it
+ * has been asked.
+ *
+ * `lie` receives the honest terms and the 1-based read count, and returns what
+ * the prover should claim on that read. Returning the honest value is allowed
+ * and is how a test lies on the second read only.
+ *
+ * The read count is the point of the log. `invoiceTerms()` is an independent
+ * private input on every call, so a circuit that reads it twice is comparing two
+ * unrelated values: it proves the first against the chain's commitment and then
+ * checks an amount against the second, which the prover was free to choose. A
+ * test that asserts the count is exactly one is asserting the only property that
+ * makes the commitment mean anything.
+ */
+export const lyingTerms = (
+  lie: (real: InvoiceTerms, read: number) => InvoiceTerms,
+): { readonly witnesses: Partial<typeof witnesses>; readonly log: ProverLog } => {
+  const log: ProverLog = { reads: 0 };
+  return {
+    log,
+    witnesses: {
+      invoiceTerms: (context) => {
+        const [state, real] = witnesses.invoiceTerms(context);
+        log.reads += 1;
+        return [state, lie(real, log.reads)];
+      },
+    },
+  };
+};
+
+/** A prover that tells the truth but counts how often it is asked. */
+export const countingTerms = () => lyingTerms((real) => real);
