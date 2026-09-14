@@ -34,6 +34,7 @@ import {
 } from '../src/witnesses.js';
 
 import {
+  NATIVE_SHIELDED_TOKEN,
   prepareInvoice,
   storedInvoiceFrom,
   type InvoiceDraft,
@@ -275,8 +276,28 @@ export const expectThrows = (fn: () => unknown, fragment: string): Error => {
   throw new Error(`expected a failure mentioning "${fragment}", but the call succeeded`);
 };
 
-/** A shielded coin descriptor, as `fundEscrow` wants it. */
-export const coin = (value: bigint, color: Uint8Array = bytes32(0xc0), nonce = randomBytes32()) => ({
+/**
+ * A shielded token that is not the native one.
+ *
+ * Stands in for any issued token an invoice might be denominated in. The
+ * circuits only ever compare colours, so the byte pattern is arbitrary; all
+ * that matters is that it differs from the native token's all-zero colour.
+ */
+export const OTHER_TOKEN = bytes32(0xc0);
+
+/**
+ * A shielded coin descriptor, as `settleWithNote` and `fundEscrow` want it.
+ *
+ * The colour defaults to the native token because that is what `prepareInvoice`
+ * puts in the terms when a draft names none, and both circuits refuse a coin
+ * whose colour is not the one the invoice is payable in. A test that wants that
+ * refusal has to ask for it by passing a colour.
+ */
+export const coin = (
+  value: bigint,
+  color: Uint8Array = NATIVE_SHIELDED_TOKEN,
+  nonce = randomBytes32(),
+) => ({
   nonce,
   color,
   value,

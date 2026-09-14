@@ -19,6 +19,7 @@ import {
   expectThrows,
   issue,
   led,
+  OTHER_TOKEN,
   pk,
   SELLER_PIN,
   SELLER_SECRET,
@@ -29,7 +30,7 @@ import {
 } from './harness.js';
 
 import { DisputeOutcome, InvoiceStatus, SettlementMode } from '../build/contract/index.js';
-import { payableTotal } from '../src/invoice.js';
+import { NATIVE_SHIELDED_TOKEN, payableTotal } from '../src/invoice.js';
 import { toHex } from '../src/util.js';
 
 /** Payout addresses. Nothing here asserts on them beyond the call succeeding. */
@@ -49,20 +50,21 @@ type EscrowOptions = {
   readonly arbiter?: boolean;
   readonly value?: bigint;
   readonly deadline?: bigint;
+  readonly draft?: Parameters<typeof draft>[0];
 };
 
 /** A fresh deployment with an invoice open, plus the three parties to it. */
-const openInvoice = async (options: { arbiter?: boolean } = {}) => {
+const openInvoice = async (
+  options: { arbiter?: boolean; draft?: Parameters<typeof draft>[0] } = {},
+) => {
   const d0 = deploy();
   const seller = actor(d0, SELLER_SECRET, SELLER_PIN);
   const buyer = actor(d0, BUYER_SECRET, BUYER_PIN);
   const arbiter = actor(d0, ARBITER_SECRET, ARBITER_PIN);
-  const issued = await issue(
-    d0,
-    seller,
-    buyer,
-    options.arbiter === true ? { arbiterKey: arbiter.key } : {},
-  );
+  const issued = await issue(d0, seller, buyer, {
+    arbiterKey: options.arbiter === true ? arbiter.key : undefined,
+    draft: options.draft,
+  });
   return { ...issued, seller, buyer, arbiter };
 };
 
@@ -74,7 +76,7 @@ const openInvoice = async (options: { arbiter?: boolean } = {}) => {
  * custody. Skipping the share is not a shortcut here .. the call would fail.
  */
 const funded = async (options: EscrowOptions = {}) => {
-  const open = await openInvoice({ arbiter: options.arbiter });
+  const open = await openInvoice({ arbiter: options.arbiter, draft: options.draft });
   const deadline = options.deadline ?? DEADLINE;
   const value = options.value ?? ESCROW_VALUE;
   const buyerState = stageFor(share(open.buyer.state, open.stored), open.prepared);
@@ -85,7 +87,9 @@ const funded = async (options: EscrowOptions = {}) => {
       ctx(open.d, buyerState),
       open.invoiceId,
       open.buyer.pin,
-      coin(value),
+      // Locked in whatever token this invoice is payable in, because the circuit
+      // refuses any other .. the same rule the escrow tests below pin down.
+      coin(value, open.prepared.terms.tokenType),
       deadline,
       T0,
     ),
@@ -206,6 +210,50 @@ describe('funding an escrow', () => {
           T0,
         ),
       'escrowed amount must be positive',
+    );
+  });
+
+  it('refuses a coin in a token the invoice does not name', async () => {
+    const open = await openInvoice();
+    const buyerState = stageFor(share(open.buyer.state, open.stored), open.prepared);
+
+    // The escrowed coin is the one that later pays the seller, so a lock in the
+    // wrong token would leave the contract holding something the invoice never
+    // asked for and the seller no way to refuse it when it is released.
+    expectThrows(
+      () =>
+        open.d.contract.impureCircuits.fundEscrow(
+          ctx(open.d, buyerState),
+          open.invoiceId,
+          open.buyer.pin,
+          coin(ESCROW_VALUE, OTHER_TOKEN),
+          DEADLINE,
+          T0,
+        ),
+      'escrow is not in the token this invoice is payable in',
+    );
+  });
+
+  it('follows the token the invoice names rather than a fixed one', async () => {
+    const f = await funded({ draft: { tokenType: OTHER_TOKEN } });
+    expect(toHex(led(f.d).escrowVault.lookup(f.invoiceId).color)).toBe(toHex(OTHER_TOKEN));
+
+    // The native token is what every other escrow in this file locks, and this
+    // invoice refuses it. That is the difference between a rule that reads the
+    // terms and one that hard-codes a colour.
+    const open = await openInvoice({ draft: { tokenType: OTHER_TOKEN } });
+    const buyerState = stageFor(share(open.buyer.state, open.stored), open.prepared);
+    expectThrows(
+      () =>
+        open.d.contract.impureCircuits.fundEscrow(
+          ctx(open.d, buyerState),
+          open.invoiceId,
+          open.buyer.pin,
+          coin(ESCROW_VALUE, NATIVE_SHIELDED_TOKEN),
+          DEADLINE,
+          T0,
+        ),
+      'escrow is not in the token this invoice is payable in',
     );
   });
 

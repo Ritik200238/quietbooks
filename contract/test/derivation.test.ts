@@ -111,6 +111,12 @@ describe('integer encoding matches the circuit', () => {
         amount: value,
         taxAmount: value / 10n,
         currency: currencyCode('USDM'),
+        // Set to something other than the native token so that a circuit which
+        // folded the token type into the root would disagree with the fold
+        // below, which deliberately does not carry it: the token an invoice is
+        // payable in is bound by the terms commitment, not disclosable to an
+        // auditor field by field.
+        tokenType: bytes32(0x04),
         orderRef: bytes32(0x05),
         itemsHash: bytes32(0x06),
         memoHash: bytes32(0x07),
@@ -325,10 +331,16 @@ describe('commitments agree with the circuit', () => {
     const withOtherAmount = { ...base, terms: { ...base.terms, amount: base.terms.amount + 1n } };
     const withOtherDue = { ...base, dueDate: 101n };
     const withOtherBuyer = { ...base, buyerKey: bytes32(0x04) };
+    // The token an invoice is payable in appears nowhere on the anchor, so this
+    // commitment is the only thing pinning it. If it fell outside, a party could
+    // present terms naming a different token and still open the commitment the
+    // chain recorded at issuance, and the settlement check would be worthless.
+    const withOtherToken = { ...base, terms: { ...base.terms, tokenType: bytes32(0x08) } };
 
     expect(toHex(commitTerms(withOtherAmount, prepared.termsSalt))).not.toBe(original);
     expect(toHex(commitTerms(withOtherDue, prepared.termsSalt))).not.toBe(original);
     expect(toHex(commitTerms(withOtherBuyer, prepared.termsSalt))).not.toBe(original);
+    expect(toHex(commitTerms(withOtherToken, prepared.termsSalt))).not.toBe(original);
   });
 
   it('produces nine distinct field commitments', async () => {
