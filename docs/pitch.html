@@ -706,18 +706,18 @@ instance of the same contract in the same segment.</pre>
       against the local result of the call. Both privacy claims are asserted, in opposite
       directions: the private path must not leave the amount readable, and the escrow path
       must.</p>
-    <pre class="transcript"><b>PASS</b>  deploy the contract with real ZK proofs            (25.6s)
+    <pre class="transcript"><b>PASS</b>  deploy the contract with real ZK proofs            (20.9s)
 <b>PASS</b>  indexer returns the deployed state
-<b>PASS</b>  issue an invoice                                  (145.1s)
+<b>PASS</b>  issue an invoice                                  (102.5s)
 <b>PASS</b>  the chain shows the invoice and hides its amount
-<b>PASS</b>  the buyer pays the seller and settles in one tx    (161.7s)
+<b>PASS</b>  the buyer pays the seller and settles in one tx     (95.0s)
 <b>PASS</b>  the chain shows the settlement and still hides the amount
-<b>PASS</b>  grant an auditor three fields                      (27.5s)
-<b>PASS</b>  revoke the audit grant                             (31.3s)
-<b>PASS</b>  the buyer funds escrow with a real shielded coin   (150.1s)
+<b>PASS</b>  grant an auditor three fields                      (23.2s)
+<b>PASS</b>  revoke the audit grant                             (25.1s)
+<b>PASS</b>  the buyer funds escrow with a real shielded coin    (71.9s)
 <b>PASS</b>  the contract holds the coin, and its value is public
 <b>PASS</b>  the buyer opens the deployment through the API
-<b>PASS</b>  the buyer releases the escrow to the seller        (122.6s)
+<b>PASS</b>  the buyer releases the escrow to the seller         (59.2s)
 <b>PASS</b>  the chain shows the escrow paid out and the vault emptied
 <b>PASS</b>  a party who has never seen this deployment can join it
 
