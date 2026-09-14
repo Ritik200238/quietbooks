@@ -13,7 +13,7 @@ import { useCallback, useMemo, useState, type FormEvent } from 'react';
 
 import { encodeCoinPublicKey } from '@midnight-ntwrk/compact-runtime';
 import type { InvoiceDraft, LineItem } from '@quietbooks/contract';
-import { daysFromNow, fromHex, lineItemsTotal } from '@quietbooks/contract';
+import { daysFromNow, fromHex, lineItemsTotal, toHex } from '@quietbooks/contract';
 
 import { CopyButton, Digest } from '../components/Copyable';
 import { ActionFeedback, SelectField, TextAreaField, TextField } from '../components/Form';
@@ -181,6 +181,27 @@ export const NewInvoice = (): JSX.Element => {
       ? parsedBuyerPayout.error
       : undefined;
 
+  const hasArbiter = arbiterKey.trim().length > 0;
+  const buyerPayoutBytes =
+    parsedBuyerPayout !== undefined && 'value' in parsedBuyerPayout
+      ? parsedBuyerPayout.value
+      : undefined;
+
+  // Both of these are refused by the contract at issuance, and both are easy to
+  // do by accident: leave the field blank, or paste your own key into it because
+  // it is the one on screen. Catching them here costs nothing. Letting them
+  // through costs a proof, a failed transaction and a message written for a
+  // circuit rather than for a person.
+  //
+  // The rule exists because the seller writes the terms and `resolveDispute`
+  // pays the address those terms name. With no buyer address a ruling for the
+  // buyer burns the escrow; with the seller's own address it pays the seller.
+  // Either way the arbiter cannot actually rule against the party who named
+  // them.
+  const arbiterNeedsBuyerPayout = hasArbiter && buyerPayoutBytes === undefined;
+  const buyerPayoutIsOurs =
+    buyerPayoutBytes !== undefined && toHex(buyerPayoutBytes) === toHex(coinPublicKeyBytes);
+
   const blocked = blockedBy([
     [state?.paused === true, PAUSED_REASON],
     [buyerKey.trim().length === 0, 'Ask the buyer for their party key and paste it below.'],
@@ -190,7 +211,15 @@ export const NewInvoice = (): JSX.Element => {
       'The buyer payout is the key their wallet gives out, or leave it empty.',
     ],
     [
-      arbiterKey.trim().length > 0 && !isHex32(arbiterKey),
+      arbiterNeedsBuyerPayout,
+      'An invoice with an arbiter needs the buyer’s payout key, or the arbiter has nowhere to send the money if they rule the buyer’s way.',
+    ],
+    [
+      buyerPayoutIsOurs,
+      'That is this wallet’s own payout key. The buyer’s has to be theirs, or a ruling in their favour would pay you.',
+    ],
+    [
+      hasArbiter && !isHex32(arbiterKey),
       'The arbiter key is 64 hexadecimal characters, or leave it empty.',
     ],
   ]);
@@ -209,9 +238,7 @@ export const NewInvoice = (): JSX.Element => {
         orderRef,
         dueDate: fromLocalInputValue(dueDate),
         sellerPayout: coinPublicKeyBytes,
-        ...(parsedBuyerPayout !== undefined && 'value' in parsedBuyerPayout
-          ? { buyerPayout: parsedBuyerPayout.value }
-          : {}),
+        ...(buyerPayoutBytes !== undefined ? { buyerPayout: buyerPayoutBytes } : {}),
       };
       const result = await api.issueInvoice(draft, fromHex(normaliseHex(buyerKey)), {
         ...(arbiterKey.trim().length > 0
@@ -659,9 +686,16 @@ export const NewInvoice = (): JSX.Element => {
             value={buyerPayout}
             onChange={setBuyerPayout}
             mono
-            placeholder="Leave empty if this invoice has no arbiter"
-            hint="Where the buyer is paid if an arbiter rules a dispute their way, so it is only needed when you name one below. Ask them for it: it is not their party key, which is a hash and cannot receive anything."
-            error={buyerPayoutProblem}
+            placeholder="Required if you name an arbiter below"
+            hint="Where the buyer is paid if an arbiter rules a dispute their way. Required once you name an arbiter below, and it has to be theirs rather than yours. Ask them for it: it is not their party key, which is a hash and cannot receive anything."
+            error={
+              buyerPayoutProblem ??
+              (buyerPayoutIsOurs
+                ? 'This is your own payout key, not the buyer’s.'
+                : arbiterNeedsBuyerPayout
+                  ? 'Needed, because this invoice names an arbiter.'
+                  : undefined)
+            }
           />
           <TextField
             label="Arbiter party key (optional)"
