@@ -540,7 +540,7 @@ const main = async (): Promise<void> => {
 
     await step('the buyer funds escrow with a real shielded coin', () =>
       withOpenings(escrowStaging, () =>
-        deployed.callTx.fundEscrow(escrowId, BUYER_PIN, escrowCoin, escrowDeadline, nowSeconds()),
+        deployed.callTx.fundEscrow(escrowId, BUYER_PIN, escrowCoin, escrowDeadline),
       ),
     );
 
