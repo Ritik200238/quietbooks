@@ -9,8 +9,6 @@
 
 import { useMemo } from 'react';
 
-import { toHex } from '@quietbooks/contract';
-
 import { Digest } from './Copyable';
 import { routePath, useRoute, type Route } from '../state/router';
 import { useSession } from '../state/session';
@@ -136,15 +134,21 @@ export const Header = (): JSX.Element => {
                   <span className="fact-label">Where we get paid</span>
                   <span className="fact-value">
                     <Digest
-                      value={toHex(connection.coinPublicKeyBytes)}
+                      value={connection.coinPublicKey}
                       label="our coin public key"
-                      lead={8}
+                      lead={12}
                       tail={6}
                     />
                   </span>
                   {/* A seller issuing an invoice needs the buyer's copy of this,
                       and until now the interface showed a buyer only their party
-                      key -- which is a hash, and which nobody can pay. */}
+                      key -- which is a hash, and which nobody can pay.
+
+                      The wallet's own spelling, not the hex behind it. The new
+                      invoice screen shows the same string for the same key, and
+                      showing one form here and the other there meant whichever a
+                      buyer copied, the interface had told them to send the
+                      other. */}
                   <span className="fact-note small quiet">
                     Send this to anyone invoicing you. Not the party key above: that is a hash,
                     and nothing can be paid to it.
@@ -227,8 +231,9 @@ export const Header = (): JSX.Element => {
         <div className="header-inner header-banner">
           <div className="callout callout-warn">
             <span className="callout-title">This deployment is paused</span>
-            The administrator has stopped every state-advancing call. Reading records and
-            revoking an audit grant still work; issuing, settling and escrow do not.
+            The administrator has stopped new business. Reading records still works, and so do
+            the two calls a pause must never block: revoking an audit grant, and refunding an
+            escrow whose deadline has passed. Issuing, settling, funding and disputing do not.
             {state?.isAdmin === true && (
               <>
                 {' '}

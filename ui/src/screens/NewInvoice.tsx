@@ -709,14 +709,21 @@ export const NewInvoice = (): JSX.Element => {
                 : undefined
             }
           />
-          {arbiterKey.trim().length > 0 && buyerPayout.trim().length === 0 && (
+          {(arbiterNeedsBuyerPayout || buyerPayoutIsOurs) && (
             <div className="callout callout-warn">
               <span className="callout-title">
-                This invoice names an arbiter but nowhere to pay the buyer
+                {buyerPayoutIsOurs
+                  ? 'Both sides of this dispute would pay the same wallet'
+                  : 'This invoice names an arbiter but nowhere to pay the buyer'}
               </span>
-              A ruling in the buyer’s favour has to send the escrowed coin somewhere, and that
-              address is fixed at issuance like the rest of the terms. Issue it as it stands and
-              the arbiter will only be able to rule for you.
+              A ruling in the buyer&rsquo;s favour has to send the escrowed coin somewhere, and
+              that address is fixed at issuance like the rest of the terms.{' '}
+              {buyerPayoutIsOurs
+                ? 'As it stands the buyer’s address is yours, so ruling for them would pay you.'
+                : 'As it stands there is no address, so ruling for them would burn the escrow.'}{' '}
+              Either way the arbiter could not rule against you, which is the one thing naming one
+              is for — so the contract refuses it, and the button stays off until this is
+              fixed.
             </div>
           )}
         </div>

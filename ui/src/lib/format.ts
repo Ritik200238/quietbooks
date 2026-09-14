@@ -111,13 +111,25 @@ export const formatDate = (unixSeconds: bigint): string => {
   return date.toISOString().slice(0, 10);
 };
 
+/**
+ * Date and time, both in UTC, and labelled.
+ *
+ * This used to compose `formatDate`, which is `toISOString` and therefore UTC,
+ * with `toTimeString`, which is local. For a reader at UTC+5:30 a settlement at
+ * 02:00 their time rendered as the previous day's date beside the right clock
+ * time, with nothing on screen saying which half was in which zone. It is used
+ * for the escrow deadline the refund card reads out and for audit grant
+ * expiries, where a reader being a day out about a deadline matters.
+ *
+ * UTC throughout, because these are chain timestamps and the chain has no
+ * locale, and marked so nobody has to guess which one they are looking at.
+ */
 export const formatDateTime = (unixSeconds: bigint): string => {
   if (unixSeconds === 0n) {
     return '—';
   }
-  const date = new Date(Number(unixSeconds) * 1000);
-  const time = date.toTimeString().slice(0, 5);
-  return `${formatDate(unixSeconds)} ${time}`;
+  const iso = new Date(Number(unixSeconds) * 1000).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 };
 
 /** "in 14 days" / "9 days ago" / "today", for a due date column. */

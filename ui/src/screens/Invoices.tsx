@@ -118,10 +118,12 @@ const Administration = ({ paused }: { readonly paused: boolean }): JSX.Element =
                 paid, escrowed, released or disputed until you resume it.
               </p>
               <p>
-                That includes a refund. A buyer whose escrow deadline passes while the pause is
-                on cannot take their own money back, because that call is stopped too. You are
-                the only wallet that can lift it.
+                Two calls carry on regardless, and deliberately: a buyer whose escrow deadline
+                has passed can still take their own money back, and a seller can still revoke an
+                auditor&rsquo;s access. An emergency stop on new business must not trap money
+                somebody is already owed, or lock a seller out of withdrawing a disclosure.
               </p>
+              <p>You are the only wallet that can lift it.</p>
             </>
           ),
         }}
