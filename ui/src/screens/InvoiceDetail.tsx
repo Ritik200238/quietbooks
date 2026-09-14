@@ -72,8 +72,6 @@ const SEALED_REASON =
 // ---------------------------------------------------------------------------
 
 const SettleWithNote = ({ api, view, paused, onDone }: ActionProps): JSX.Element => {
-  const [payout, setPayout] = useState('');
-
   const action = useAction(async () => {
     // The nonce identifies this one coin. Fresh every time: reusing one names a
     // coin the ledger already knows about.
@@ -85,7 +83,7 @@ const SettleWithNote = ({ api, view, paused, onDone }: ActionProps): JSX.Element
       color: view.stored!.terms.tokenType,
       value: view.payable!,
     };
-    await api.settleWithNote(view.invoiceId, coin, fromHex(normaliseHex(payout)));
+    await api.settleWithNote(view.invoiceId, coin, view.stored!.terms.sellerPayout);
     await onDone();
   }, PROVING_NOTE);
 
@@ -93,11 +91,6 @@ const SettleWithNote = ({ api, view, paused, onDone }: ActionProps): JSX.Element
     [view.stored === undefined, SEALED_REASON],
     [paused, PAUSED_REASON],
     [view.payable === undefined, 'This wallet cannot open the invoice, so it cannot know what to pay.'],
-    [payout.trim().length === 0, "Give the seller's coin public key."],
-    [
-      !isHex32(payout) || isZeroHex(payout),
-      'A coin public key is 64 hexadecimal characters and cannot be zero.',
-    ],
   ]);
 
   return (
@@ -129,21 +122,20 @@ const SettleWithNote = ({ api, view, paused, onDone }: ActionProps): JSX.Element
             </p>
             <p>
               The circuit compares the payment against the terms you hold and refuses anything
-              but the exact total, so you cannot underpay by mistake.
+              but the exact total, to the address the invoice names. You cannot underpay by
+              mistake, and you cannot pay the wrong person.
             </p>
           </>
         ),
       }}
       onRun={() => void action.run()}
     >
-      <TextField
-        label="Seller's coin public key"
-        value={payout}
-        onChange={setPayout}
-        mono
-        placeholder="64 hexadecimal characters"
-        hint="Not the party key shown on the invoice: a party key is a hash and nothing can be paid to it. The seller sends you this out of band."
-      />
+      <div className="callout">
+        <span className="callout-title">The destination is not yours to choose</span>
+        The coin goes to the address this invoice names. That address sits inside the terms
+        commitment, so it was fixed when the invoice was issued, and the circuit refuses a
+        payment addressed anywhere else rather than recording it as a settlement.
+      </div>
     </ActionCard>
   );
 };
@@ -393,29 +385,23 @@ const FundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element => 
 };
 
 const ReleaseEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element => {
-  const { coinPublicKey } = useConnected();
-  const [payout, setPayout] = useState('');
-
   const action = useAction(async () => {
-    await api.releaseEscrow(view.invoiceId, fromHex(normaliseHex(payout)));
+    await api.releaseEscrow(view.invoiceId, view.stored!.terms.sellerPayout);
     await onDone();
   }, PROVING_NOTE);
 
+  // The circuit proves the terms open the chain's commitment before it compares
+  // the recipient against them, so a wallet without the openings cannot release
+  // even though it is the buyer and the money is sitting there.
   const blocked = blockedBy([
+    [view.stored === undefined, SEALED_REASON],
     [paused, PAUSED_REASON],
-    [payout.trim().length === 0, 'The seller has to give you a key to pay.'],
-    [
-      !isHex32(payout) || isZeroHex(payout),
-      // Zero is a syntactically valid key that nothing controls. Neither the
-      // circuit nor the ledger refuses it, so a coin sent there is simply gone.
-      'A shielded coin public key is 64 hexadecimal characters and cannot be zero.',
-    ],
   ]);
 
   return (
     <ActionCard
       title="Release escrow"
-      description="Pay the seller out of the escrow. This settles the invoice."
+      description="Pay the seller out of the escrow, at the address this invoice names. There is nothing to type: the address was fixed when the invoice was issued and the circuit refuses any other. This settles the invoice."
       buttonLabel="Release to the seller"
       tone="primary"
       state={action.state}
@@ -427,50 +413,36 @@ const ReleaseEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element 
         confirmLabel: 'Release',
         body: (
           <p>
-            The coin leaves the contract and goes to the key below. Check it against what the
-            seller gave you: a payout to the wrong key cannot be recalled.
+            The coin leaves the contract, goes to the seller on this invoice, and the invoice
+            is recorded as settled. It cannot be recalled.
           </p>
         ),
       }}
       onRun={() => void action.run()}
-    >
-      <TextField
-        label="Seller’s shielded coin public key"
-        value={payout}
-        onChange={setPayout}
-        mono
-        placeholder="64 hexadecimal characters"
-        hint="The seller sends you this. It is not the party key on the invoice: that one identifies them to the contract, this one receives coins."
-      />
-      {isHex32(coinPublicKey) && (
-        <p className="small quiet">
-          Yours, for reference: <code className="mono">{truncateHex(coinPublicKey)}</code>
-        </p>
-      )}
-    </ActionCard>
+    />
   );
 };
 
-const RefundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element => {
-  const { coinPublicKey } = useConnected();
-  const [payout, setPayout] = useState(isHex32(coinPublicKey) ? normaliseHex(coinPublicKey) : '');
+const RefundEscrow = ({ api, view, onDone }: ActionProps): JSX.Element => {
+  // The refund is the buyer's own money coming back to the buyer, and this
+  // wallet is the only caller the circuit accepts. Its own key is therefore the
+  // only sensible destination, and typing it out by hand only opens the door to
+  // a transcription error that sends the coin to a key nobody controls.
+  const { coinPublicKeyBytes } = useConnected();
   const now = nowSeconds();
   const passed = view.anchor.escrowDeadline < now;
 
   const action = useAction(async () => {
-    await api.refundEscrow(view.invoiceId, fromHex(normaliseHex(payout)));
+    await api.refundEscrow(view.invoiceId, coinPublicKeyBytes);
     await onDone();
   }, PROVING_NOTE);
 
+  // Deliberately not blocked on `paused`. The circuit exempts a refund from the
+  // pause for a reason -- an emergency stop on new business must not trap money
+  // somebody is already owed back -- and a button disabled here would reimpose
+  // exactly what the contract went out of its way to allow.
   const blocked = blockedBy([
     [!passed, 'The contract refuses a refund before the deadline.'],
-    [paused, PAUSED_REASON],
-    [
-      !isHex32(payout) || isZeroHex(payout),
-      // Zero is a syntactically valid key that nothing controls. Neither the
-      // circuit nor the ledger refuses it, so a coin sent there is simply gone.
-      'A shielded coin public key is 64 hexadecimal characters and cannot be zero.',
-    ],
   ]);
 
   return (
@@ -478,7 +450,7 @@ const RefundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element =
       title="Refund escrow"
       description={
         passed
-          ? 'Take the escrowed coin back. The deadline has passed, so the contract allows it.'
+          ? 'Take the escrowed coin back. The deadline has passed, so the contract allows it. It returns to the wallet connected here.'
           : `Available only after the escrow deadline, ${formatDateTime(view.anchor.escrowDeadline)} (${relativeDays(view.anchor.escrowDeadline, now)}).`
       }
       buttonLabel="Refund to me"
@@ -489,19 +461,15 @@ const RefundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element =
       confirm={{
         title: 'Refund the escrow to yourself?',
         confirmLabel: 'Refund',
-        body: <p>The seller is not paid, and the invoice ends as refunded.</p>,
+        body: (
+          <p>
+            The coin comes back to the wallet connected here. The seller is not paid, and the
+            invoice ends as refunded.
+          </p>
+        ),
       }}
       onRun={() => void action.run()}
-    >
-      <TextField
-        label="Your shielded coin public key"
-        value={payout}
-        onChange={setPayout}
-        mono
-        placeholder="64 hexadecimal characters"
-        hint="Where the refund goes."
-      />
-    </ActionCard>
+    />
   );
 };
 
@@ -539,32 +507,39 @@ const OpenDispute = ({ api, view, paused, onDone }: ActionProps): JSX.Element =>
 
 const ResolveDispute = ({ api, view, paused, onDone }: ActionProps): JSX.Element => {
   const [forSeller, setForSeller] = useState<'seller' | 'buyer'>('seller');
-  const [payout, setPayout] = useState('');
 
   const action = useAction(async () => {
+    const { terms } = view.stored!;
     await api.resolveDispute(
       view.invoiceId,
       forSeller === 'seller',
-      fromHex(normaliseHex(payout)),
+      forSeller === 'seller' ? terms.sellerPayout : terms.buyerPayout,
     );
     await onDone();
   }, PROVING_NOTE);
 
+  // A buyer payout is optional at issuance, and an invoice issued without one
+  // carries zero here. Zero is a syntactically valid key that nothing controls:
+  // the circuit would compare the argument against it, find them equal, and send
+  // the coin somewhere nobody can spend it from. The contract cannot catch this,
+  // so the screen does.
+  const buyerPayoutMissing =
+    view.stored !== undefined && isZeroHex(toHex(view.stored.terms.buyerPayout));
+
   const blocked = blockedBy([
+    [view.stored === undefined, SEALED_REASON],
     [paused, PAUSED_REASON],
-    [payout.trim().length === 0, 'The winning side has to give you a key to pay.'],
     [
-      !isHex32(payout) || isZeroHex(payout),
-      // Zero is a syntactically valid key that nothing controls. Neither the
-      // circuit nor the ledger refuses it, so a coin sent there is simply gone.
-      'A shielded coin public key is 64 hexadecimal characters and cannot be zero.',
+      forSeller === 'buyer' && buyerPayoutMissing,
+      'This invoice was issued without an address to pay the buyer, so a ruling their way has ' +
+        'nowhere to send the coin. Only a ruling for the seller can be recorded.',
     ],
   ]);
 
   return (
     <ActionCard
       title="Resolve the dispute"
-      description="You were named as the arbiter when this invoice was issued. Your ruling moves the escrowed coin and is final."
+      description="You were named as the arbiter when this invoice was issued. Your ruling moves the escrowed coin and is final. The ruling also decides where the coin goes: both addresses are inside the terms, and you cannot send it anywhere else."
       buttonLabel="Record the ruling"
       tone="danger"
       state={action.state}
@@ -577,8 +552,8 @@ const ResolveDispute = ({ api, view, paused, onDone }: ActionProps): JSX.Element
         tone: 'danger',
         body: (
           <p>
-            The escrowed coin goes to the key below and the dispute is closed. The losing side’s
-            public record carries the loss.
+            The escrowed coin goes to the side you have named here and the dispute is closed.
+            The losing side’s public record carries the loss.
           </p>
         ),
       }}
@@ -593,14 +568,13 @@ const ResolveDispute = ({ api, view, paused, onDone }: ActionProps): JSX.Element
         ]}
         onChange={setForSeller}
       />
-      <TextField
-        label="Shielded coin public key to pay"
-        value={payout}
-        onChange={setPayout}
-        mono
-        placeholder="64 hexadecimal characters"
-        hint="The winning side's receiving key, as they gave it to you."
-      />
+      <p className="small quiet">
+        {forSeller === 'seller'
+          ? 'Pays the seller at the address this invoice names.'
+          : buyerPayoutMissing
+            ? 'This invoice names no address for the buyer, so this ruling cannot be recorded.'
+            : 'Pays the buyer at the address this invoice names.'}
+      </p>
     </ActionCard>
   );
 };

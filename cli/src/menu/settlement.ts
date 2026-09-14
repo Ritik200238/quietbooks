@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import { fromHex, randomBytes32, sha256, toHex } from '@quietbooks/contract';
+import { encodeCoinPublicKey } from '@midnight-ntwrk/compact-runtime';
+
+import { randomBytes32, sha256, toHex } from '@quietbooks/contract';
 
 import type { AppContext } from '../context.js';
 import { groupDigits, heading, out } from '../format.js';
@@ -44,12 +46,24 @@ export const settleWithNote = async (context: AppContext): Promise<void> => {
   out('  nothing can be paid to it. The seller sends you this out of band.');
   out('');
 
-  const own = context.wallet.getCoinPublicKey();
-  const payout = await context.ask.hex32(
-    `  Seller's coin public key (64 hex, blank to pay this wallet)`,
-    { optional: true },
-  );
-  const sellerPayout = payout ?? fromHex(own);
+  // No "blank pays this wallet" default any more. It routed the full invoice
+  // total back to the buyer while still marking the invoice settled, and it was
+  // the only branch that did not need the seller's encryption key, so it was
+  // also the path of least resistance through this flow. The contract now
+  // refuses a payment addressed anywhere but the seller the invoice names, so
+  // the default could only produce a failed proof.
+  const typed = await context.ask.line(`  Seller's coin public key`);
+  let sellerPayout: Uint8Array;
+  try {
+    // Through the SDK's codec, not `fromHex`. A `CoinPublicKey` is a 35-byte
+    // hex string, and the circuit wants the 32 bytes inside it; decoding by
+    // hand produces the wrong length and fails inside the circuit.
+    sellerPayout = encodeCoinPublicKey(typed.trim());
+  } catch {
+    out('  That is not a coin public key. Ask the seller for the value their');
+    out('  own identity screen prints. Nothing was sent.');
+    return;
+  }
 
   // The nonce identifies this particular coin. A fresh one every time, because
   // reusing one names a coin the ledger already knows about.

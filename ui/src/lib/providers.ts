@@ -12,6 +12,7 @@
 //    for every call, so anyone who is not running their own should at least be
 //    able to see which one they are using.
 
+import { encodeCoinPublicKey } from '@midnight-ntwrk/compact-runtime';
 import type { ConnectedAPI } from '@midnight-ntwrk/dapp-connector-api';
 import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
@@ -66,6 +67,14 @@ export type BuiltProviders = {
   readonly providers: QuietBooksProviders;
   readonly endpoints: Endpoints;
   readonly shieldedCoinPublicKey: string;
+  /**
+   * The same key as the 32 bytes a circuit wants.
+   *
+   * A wallet hands out its coin public key in Bech32m. The contract's payout
+   * arguments are `Bytes<32>`, and decoding that string as hex gives the wrong
+   * bytes or none at all. Decoded once here so no screen has to guess.
+   */
+  readonly shieldedCoinPublicKeyBytes: Uint8Array;
 };
 
 /**
@@ -134,5 +143,10 @@ export const buildProviders = async (connected: ConnectedAPI): Promise<BuiltProv
     },
   };
 
-  return { providers, endpoints, shieldedCoinPublicKey: shieldedAddresses.shieldedCoinPublicKey };
+  return {
+    providers,
+    endpoints,
+    shieldedCoinPublicKey: shieldedAddresses.shieldedCoinPublicKey,
+    shieldedCoinPublicKeyBytes: encodeCoinPublicKey(shieldedAddresses.shieldedCoinPublicKey),
+  };
 };

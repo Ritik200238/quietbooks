@@ -265,6 +265,12 @@ const main = async (): Promise<void> => {
     const SELLER_PIN = 1n;
     const BUYER_PIN = 2n;
 
+    // One wallet plays both sides here, so both payouts are its own key. That is
+    // a limitation of a single-wallet harness, not of the contract: the circuits
+    // now compare a payment's recipient against the address the invoice names,
+    // so a run that tried to redirect one would be refused.
+    const payoutKey = encodeCoinPublicKey(walletProvider.getCoinPublicKey());
+
     const sellerKey = pureCircuits.derivePartyKeyWith(instanceSalt, secret, SELLER_PIN);
     const buyerKey = pureCircuits.derivePartyKeyWith(instanceSalt, secret, BUYER_PIN);
 
@@ -279,6 +285,8 @@ const main = async (): Promise<void> => {
       memo: 'Net 30.',
       orderRef: 'PO-2026-0184',
       dueDate,
+      sellerPayout: payoutKey,
+      buyerPayout: payoutKey,
     });
 
     const invoiceId = deriveInvoiceId(sellerKey, prepared.nonce);
@@ -399,7 +407,6 @@ const main = async (): Promise<void> => {
       color: prepared.terms.tokenType,
       value: payableTotal(prepared.terms),
     };
-    const sellerPayout = encodeCoinPublicKey(walletProvider.getCoinPublicKey());
 
     await step('the buyer pays the seller and settles in one transaction', () =>
       withOpenings({ stage, unstage }, () =>
@@ -407,7 +414,7 @@ const main = async (): Promise<void> => {
           invoiceId,
           BUYER_PIN,
           payment,
-          { bytes: sellerPayout },
+          { bytes: payoutKey },
           nowSeconds(),
         ),
       ),
@@ -498,6 +505,8 @@ const main = async (): Promise<void> => {
       memo: 'Released on acceptance.',
       orderRef: 'PO-2026-0207',
       dueDate: escrowDue,
+      sellerPayout: payoutKey,
+      buyerPayout: payoutKey,
     });
 
     const escrowId = deriveInvoiceId(sellerKey, escrowPrepared.nonce);
@@ -580,7 +589,7 @@ const main = async (): Promise<void> => {
     });
 
     await step('the buyer releases the escrow to the seller', () =>
-      api.releaseEscrow(toHex(escrowId), encodeCoinPublicKey(walletProvider.getCoinPublicKey()), {
+      api.releaseEscrow(toHex(escrowId), payoutKey, {
         pin: BUYER_PIN,
       }),
     );

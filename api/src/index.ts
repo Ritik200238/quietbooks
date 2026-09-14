@@ -784,6 +784,8 @@ type SerialisedInvoice = {
     taxAmount: string;
     currency: string;
     tokenType: string;
+    sellerPayout: string;
+    buyerPayout: string;
     orderRef: string;
     itemsHash: string;
     memoHash: string;
@@ -805,6 +807,8 @@ const serialiseStored = (stored: StoredInvoice): SerialisedInvoice => ({
     taxAmount: stored.terms.taxAmount.toString(),
     currency: toHex(stored.terms.currency),
     tokenType: toHex(stored.terms.tokenType),
+    sellerPayout: toHex(stored.terms.sellerPayout),
+    buyerPayout: toHex(stored.terms.buyerPayout),
     orderRef: toHex(stored.terms.orderRef),
     itemsHash: toHex(stored.terms.itemsHash),
     memoHash: toHex(stored.terms.memoHash),
@@ -852,6 +856,8 @@ const deserialiseStored = (value: unknown): StoredInvoice => {
       // import would succeed and the first settlement would fail deep inside a
       // circuit with a message about terms not opening.
       tokenType: fromHex(requireField(raw.terms?.tokenType, 'terms.tokenType')),
+      sellerPayout: fromHex(requireField(raw.terms?.sellerPayout, 'terms.sellerPayout')),
+      buyerPayout: fromHex(requireField(raw.terms?.buyerPayout, 'terms.buyerPayout')),
       orderRef: fromHex(raw.terms.orderRef),
       itemsHash: fromHex(raw.terms.itemsHash),
       memoHash: fromHex(raw.terms.memoHash),
