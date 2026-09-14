@@ -51,6 +51,7 @@ import {
   nowSeconds,
   scopesFrom,
   ZERO32,
+  DisputeOutcome,
   InvoiceStatus,
   SettlementMode,
   type QuietBooksPrivateState,
@@ -286,6 +287,7 @@ const main = async (): Promise<void> => {
     // -----------------------------------------------------------------------
     const SELLER_PIN = 1n;
     const BUYER_PIN = 2n;
+    const ARBITER_PIN = 3n;
 
     // One wallet plays both sides here, so both payouts are its own key. That is
     // a limitation of a single-wallet harness, not of the contract: the circuits
@@ -632,6 +634,121 @@ const main = async (): Promise<void> => {
       assert(record.settled === 2n, 'the seller was not credited the escrow settlement');
     });
 
+
+    // -----------------------------------------------------------------------
+    // Disputes, against the real node.
+    //
+    // This path had never run outside the in-process tests, and it is the one
+    // where the contract asks most of the caller: `resolveDispute` binds the
+    // payment to the address the terms name for the winning side, so proving it
+    // means opening the terms, so the arbiter has to hold the invoice record and
+    // the API has to stage its openings. That staging was missing and nothing
+    // caught it, because every other paying call goes through the same wrapper
+    // and this one did not.
+    //
+    // The buyer's payout address is a key this run never funds. It does not need
+    // to be: an invoice with an arbiter must name a buyer address distinct from
+    // the seller's, and ruling for the seller pays the seller. What that proves
+    // is the rule and the staging, on a real node, with a real proof.
+    const arbiterKey = pureCircuits.derivePartyKeyWith(instanceSalt, secret, ARBITER_PIN);
+    const buyerPayoutKey = randomBytes32();
+
+    const disputeDue = nowSeconds() + 30n * 86_400n;
+    const disputePrepared = await prepareInvoice({
+      currency: 'USDM',
+      lineItems: [{ description: 'Milestone 3, disputed', quantity: 1n, unitPrice: 1_750_000n }],
+      taxAmount: 0n,
+      memo: 'Escalated to the named arbiter.',
+      orderRef: 'PO-2026-0233',
+      dueDate: disputeDue,
+      sellerPayout: payoutKey,
+      buyerPayout: buyerPayoutKey,
+    });
+
+    const disputeId = deriveInvoiceId(sellerKey, disputePrepared.nonce);
+    const disputeIssuedAt = nowSeconds();
+    const disputeStored = storedInvoiceFrom({
+      invoiceId: disputeId,
+      prepared: disputePrepared,
+      sellerKey,
+      buyerKey,
+      dueDate: disputeDue,
+      issuedAt: disputeIssuedAt,
+      pin: SELLER_PIN,
+      role: 'seller',
+    });
+    const disputeStaging = staging(disputeStored, disputePrepared);
+
+    await step('issue an invoice with an arbiter named', () =>
+      withOpenings(disputeStaging, () =>
+        deployed.callTx.issueInvoice(
+          SELLER_PIN,
+          buyerKey,
+          arbiterKey,
+          disputeDue,
+          disputeIssuedAt,
+        ),
+      ),
+    );
+
+    await step('the buyer funds it', () =>
+      withOpenings(disputeStaging, () =>
+        deployed.callTx.fundEscrow(
+          disputeId,
+          BUYER_PIN,
+          {
+            nonce: randomBytes32(),
+            color: disputePrepared.terms.tokenType,
+            value: payableTotal(disputePrepared.terms),
+          },
+          nowSeconds() + 14n * 86_400n,
+        ),
+      ),
+    );
+
+    await step('the buyer escalates to the arbiter', () =>
+      deployed.callTx.openDispute(disputeId, BUYER_PIN),
+    );
+
+    await step('the chain shows the invoice under dispute', async () => {
+      const l = await readLedger();
+      assert(
+        l.invoices.lookup(disputeId).status === InvoiceStatus.disputed,
+        'the invoice is not under dispute',
+      );
+      assert(l.disputedCount === 1n, 'disputedCount did not advance');
+      assert(l.escrowVault.member(disputeId), 'the vault released the coin on a dispute');
+    });
+
+    await step('the arbiter rules for the seller, through the API', () =>
+      // Through `QuietBooksAPI`, not `callTx`, because the staging this call
+      // needs is the API's job and driving the circuit directly would test the
+      // wrong layer. The openings are already in this wallet's private state --
+      // `staging` files every invoice it stages -- which is the same position a
+      // real arbiter is in once a party has shared the record with them.
+      api.resolveDispute(toHex(disputeId), true, payoutKey, { pin: ARBITER_PIN }),
+    );
+
+    await step('the chain shows the ruling, the payout and the counters', async () => {
+      const l = await readLedger();
+      assert(
+        l.invoices.lookup(disputeId).status === InvoiceStatus.resolved,
+        'the invoice is not resolved',
+      );
+      assert(!l.escrowVault.member(disputeId), 'the vault still holds the disputed coin');
+      assert(l.disputes.lookup(disputeId) === DisputeOutcome.forSeller, 'the ruling is not recorded');
+
+      // The settlement record a seller-favouring ruling writes, with the zero
+      // receipt that says it was decided rather than paid.
+      const settlement = l.settlements.lookup(disputeId);
+      assert(settlement.mode === SettlementMode.escrow, 'the ruling did not record an escrow settlement');
+      assert(toHex(settlement.receipt) === toHex(ZERO32), 'a decided settlement carries a receipt');
+
+      const loser = l.reliability.lookup(buyerKey);
+      assert(loser.disputesLost === 1n, 'the losing side was not marked');
+      const winner = l.reliability.lookup(sellerKey);
+      assert(winner.settled === 3n, 'the seller was not credited the decided settlement');
+    });
 
     // -----------------------------------------------------------------------
     // Last, because it deliberately throws away this run's private state.
