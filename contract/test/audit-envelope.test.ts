@@ -37,6 +37,7 @@ import type { TermsFrame } from '../build/contract/index.js';
 
 import {
   AUDIT_CHECKS,
+  grantCovers,
   AUDIT_ENVELOPE_VERSION,
   auditKeyHash,
   buildAuditEnvelope,
@@ -716,6 +717,71 @@ const sealText = async (
   next.integrity.payloadHash = payloadHash;
   return sealed(next);
 };
+
+describe('the two copies of the grant rule', () => {
+  /**
+   * `grantCovers` states the rule once; `validateAuditEnvelope` re-states its
+   * clauses inline, because each check has to report its own line with its own
+   * message. Two implementations of one rule is a drift waiting to happen, so
+   * they are compared here across every combination that distinguishes them
+   * rather than left to agree by inspection.
+   */
+  const cases: readonly {
+    readonly name: string;
+    readonly granted: readonly boolean[];
+    readonly requested: readonly boolean[];
+    readonly revoked: boolean;
+    readonly now: bigint;
+  }[] = [
+    { name: 'exactly the granted field', granted: scopesFrom(['amount']), requested: scopesFrom(['amount']), revoked: false, now: T0 },
+    { name: 'a subset of the grant', granted: scopesFrom(['amount', 'tax']), requested: scopesFrom(['tax']), revoked: false, now: T0 },
+    { name: 'one field outside the grant', granted: scopesFrom(['amount']), requested: scopesFrom(['memo']), revoked: false, now: T0 },
+    { name: 'a superset of the grant', granted: scopesFrom(['amount']), requested: scopesFrom(['amount', 'memo']), revoked: false, now: T0 },
+    { name: 'nothing granted at all', granted: SCOPES.map(() => false), requested: scopesFrom(['amount']), revoked: false, now: T0 },
+    { name: 'a revoked grant', granted: scopesFrom(['amount']), requested: scopesFrom(['amount']), revoked: true, now: T0 },
+    { name: 'read one second before expiry', granted: scopesFrom(['amount']), requested: scopesFrom(['amount']), revoked: false, now: EXPIRES_AT - 1n },
+    { name: 'read exactly at expiry', granted: scopesFrom(['amount']), requested: scopesFrom(['amount']), revoked: false, now: EXPIRES_AT },
+    { name: 'read after expiry', granted: scopesFrom(['amount']), requested: scopesFrom(['amount']), revoked: false, now: EXPIRES_AT + 1n },
+  ];
+
+  it('both refuse a request for no fields at all', () => {
+    // Not a fixture case: `sealAuditEnvelope` refuses to build one, so the only
+    // way to ask this question is of the rule directly. Under ordinary subset
+    // semantics the empty set is covered by anything, which is exactly the wrong
+    // answer to hand a validator.
+    const grant = {
+      auditKeyHash: bytes32(0x01),
+      scopes: scopesFrom(['amount']),
+      expiresAt: EXPIRES_AT,
+      revoked: false,
+    };
+    expect(grantCovers(grant, SCOPES.map(() => false), T0)).toBe(false);
+  });
+
+  for (const c of cases) {
+    it(`agrees on ${c.name}`, async () => {
+      const f = await fixture({ scopes: c.requested, granted: c.granted });
+      const grant = { ...f.grant, revoked: c.revoked };
+      const report = await validate(f, { grant, now: c.now });
+      const rule = grantCovers(grant, c.requested, c.now);
+      // The report has checks the rule does not model -- commitments, the field
+      // root, decryption -- so it can fail where the rule passes. What must
+      // never happen is the other direction: a report that passes while the rule
+      // says this grant does not cover this request.
+      if (report.ok) {
+        expect(rule).toBe(true);
+      }
+      // And on the clauses the rule does model, the verdicts have to match.
+      const grantChecks = [
+        AUDIT_CHECKS.revocation,
+        AUDIT_CHECKS.expiry,
+        AUDIT_CHECKS.scopeContainment,
+      ];
+      const grantSideOk = grantChecks.every((name) => checkNamed(report, name).ok);
+      expect(grantSideOk).toBe(rule);
+    });
+  }
+});
 
 describe('a payload that is not what it parses to', () => {
   /**
