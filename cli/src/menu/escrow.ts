@@ -8,6 +8,7 @@
 // is a platform constraint, not an oversight, and an operator must not be able
 // to reach `fundEscrow` without having been told.
 
+import { coinPublicKeyBytes } from '@quietbooks/api';
 import { daysFromNow, randomBytes32, toHex } from '@quietbooks/contract';
 
 import type { AppContext } from '../context.js';
@@ -51,9 +52,19 @@ const fundEscrow = async (context: AppContext): Promise<void> => {
     return;
   }
 
-  const value = await context.ask.bigint('  Amount to lock, in the token\'s smallest unit', {
-    min: 1n,
-  });
+  if (view.payable === undefined) {
+    out('  This wallet cannot open that invoice, so it cannot know what to lock.');
+    return;
+  }
+
+  // The amount is not asked for, for the same reason the token is not: the
+  // circuit asserts the coin equals the invoiced total, so every answer but one
+  // was a minute of proving followed by a refusal, and the one right answer was
+  // already in the record. The comment below this used to give exactly that
+  // reasoning for the token and stop short of applying it here.
+  const value = view.payable;
+  out(`  Locking ${groupDigits(value)}, the invoice total.`);
+
   const deadlineDays = await context.ask.days('  Escrow deadline in how many days?', 14);
   const deadline = daysFromNow(deadlineDays);
 
@@ -107,10 +118,19 @@ const releaseEscrow = async (context: AppContext): Promise<void> => {
     return;
   }
 
-  const payout = await context.ask.hex32('  Seller\'s Zswap coin public key (64 hex)');
-  if (payout === undefined) {
+  if (view.stored === undefined) {
+    out('  This wallet cannot open that invoice, so it cannot know who to pay.');
+    out('  Ask the seller to share its record first.');
     return;
   }
+
+  // Not asked for. The seller's address is inside the terms commitment and the
+  // circuit refuses a release addressed anywhere else, so a prompt here offered
+  // one right answer -- already sitting in the record this wallet holds -- and
+  // an unbounded number of ways to spend a minute proving a transaction the
+  // contract would reject.
+  const payout = view.stored.terms.sellerPayout;
+  out(`  Paying the seller at ${toHex(payout)}, the address on the invoice.`);
 
   out('  Proving and submitting.');
   await context.api.releaseEscrow(view.invoiceId, payout);
@@ -131,9 +151,27 @@ const refundEscrow = async (context: AppContext): Promise<void> => {
     return;
   }
 
-  const payout = await context.ask.hex32('  Buyer\'s Zswap coin public key (64 hex)');
-  if (payout === undefined) {
-    return;
+  // Asked for here, and only here. A refund is the buyer's own money going back
+  // to the buyer, and the caller has already proven they are the buyer, so the
+  // contract leaves the address free -- binding it would mean an invoice issued
+  // without a buyer address could never be refunded, which turns a deadline into
+  // a trap. Blank takes this wallet's own key, which is what almost everyone
+  // wants and what removes the transcription error.
+  const own = coinPublicKeyBytes(context.wallet.getCoinPublicKey());
+  const typed = await context.ask.line(
+    `  Where to refund (blank for this wallet, ${toHex(own).slice(0, 12)}...)`,
+    { allowEmpty: true },
+  );
+  let payout: Uint8Array;
+  if (typed === undefined || typed.trim().length === 0) {
+    payout = own;
+  } else {
+    try {
+      payout = coinPublicKeyBytes(typed.trim());
+    } catch {
+      out('  That is not a coin public key. Nothing was sent.');
+      return;
+    }
   }
 
   out('  Proving and submitting.');

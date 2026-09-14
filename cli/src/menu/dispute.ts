@@ -53,14 +53,26 @@ const resolveDispute = async (context: AppContext): Promise<void> => {
     }
   }
 
-  const winner = await context.ask.choice('  Decide in favour of', ['seller', 'buyer']);
-  const forSeller = winner === 'seller';
-  const payout = await context.ask.hex32(
-    `  ${forSeller ? 'Seller' : 'Buyer'}'s Zswap coin public key (64 hex)`,
-  );
-  if (payout === undefined) {
+  if (view.stored === undefined) {
+    out('  This wallet cannot open that invoice.');
+    out('');
+    out('  An arbiter needs the invoice record, because the contract binds the');
+    out('  payment to the address the terms name for the side that wins, and');
+    out('  proving that binding means opening the terms. It also means the arbiter');
+    out('  sees the amount: that is the documented price of a ruling whose');
+    out('  destination cannot be redirected. Ask a party to share the record.');
     return;
   }
+
+  const winner = await context.ask.choice('  Decide in favour of', ['seller', 'buyer']);
+  const forSeller = winner === 'seller';
+
+  // Not asked for. The verdict picks the address: the circuit compares the
+  // payment against `sellerPayout` or `buyerPayout` from the terms depending on
+  // which way the ruling went, and refuses anything else. Typing it was a way to
+  // get the ruling right and the transaction refused.
+  const payout = forSeller ? view.stored.terms.sellerPayout : view.stored.terms.buyerPayout;
+  out(`  Paying the ${winner} at ${toHex(payout)}, the address on the invoice.`);
 
   out(`  This pays the escrowed balance to the ${winner} and cannot be undone.`);
   if (!(await context.ask.confirmExactly('  Resolve the dispute?', 'resolve'))) {

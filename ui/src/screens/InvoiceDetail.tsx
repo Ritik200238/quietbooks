@@ -275,9 +275,14 @@ const CancelInvoice = ({ api, view, paused, onDone }: ActionProps): JSX.Element 
 };
 
 const FundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element => {
-  const [nonce, setNonce] = useState('');
-  const [color, setColor] = useState('');
-  const [value, setValue] = useState('');
+  // The deadline is the only thing here the buyer actually chooses.
+  //
+  // This form used to ask for a coin nonce, a token type and a value as well.
+  // The contract asserts the coin is the invoiced total in the invoiced token,
+  // so every answer but one was a minute of proving followed by "escrow must
+  // equal the invoice total" -- and the one right answer was already on screen,
+  // in the record this wallet had to hold to get this far. `SettleWithNote`
+  // fifteen lines above never asked, which is the model.
   const [deadline, setDeadline] = useState(toLocalInputValue(nowSeconds() + 14n * 86_400n));
 
   // The circuit is handed the deadline and the funding time in the same call and
@@ -298,9 +303,11 @@ const FundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element => 
     await api.fundEscrow(
       view.invoiceId,
       {
-        nonce: fromHex(normaliseHex(nonce)),
-        color: fromHex(normaliseHex(color)),
-        value: BigInt(value.trim()),
+        // Fresh every time: reusing a nonce names a coin the ledger already
+        // knows about.
+        nonce: randomBytes32(),
+        color: view.stored!.terms.tokenType,
+        value: view.payable!,
       },
       fromLocalInputValue(deadline),
     );
@@ -310,12 +317,9 @@ const FundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element => 
   const blocked = blockedBy([
     [view.stored === undefined, SEALED_REASON],
     [paused, PAUSED_REASON],
-    [!isHex32(nonce), 'The coin nonce is 64 hexadecimal characters.'],
-    [!isHex32(color), 'The token type is 64 hexadecimal characters.'],
-    [!/^\d+$/.test(value.trim()), 'The value is a whole number.'],
     [
-      /^\d+$/.test(value.trim()) && BigInt(value.trim()) === 0n,
-      'The contract refuses an escrow of zero.',
+      view.payable === undefined,
+      'This wallet cannot open the invoice, so it cannot know what to lock.',
     ],
     [deadlineAt === undefined, 'Give a refund deadline this browser can read as a date and time.'],
     [
@@ -371,31 +375,6 @@ const FundEscrow = ({ api, view, paused, onDone }: ActionProps): JSX.Element => 
       </div>
 
       <div className="field-row">
-        <TextField
-          label="Coin nonce"
-          value={nonce}
-          onChange={setNonce}
-          mono
-          placeholder="64 hexadecimal characters"
-          hint="From the coin your wallet is putting up."
-        />
-        <TextField
-          label="Token type"
-          value={color}
-          onChange={setColor}
-          mono
-          placeholder="64 hexadecimal characters"
-          hint="The coin’s type. 32 bytes."
-        />
-      </div>
-      <div className="field-row">
-        <TextField
-          label="Value"
-          value={value}
-          onChange={setValue}
-          inputMode="numeric"
-          hint="In the token’s own smallest unit, as the ledger records it."
-        />
         <TextField
           label="Refund deadline"
           type="datetime-local"
@@ -455,6 +434,7 @@ const RefundEscrow = ({ api, view, onDone }: ActionProps): JSX.Element => {
   const { coinPublicKeyBytes } = useConnected();
   const now = nowSeconds();
   const passed = view.anchor.escrowDeadline < now;
+  const stalled = view.anchor.status === InvoiceStatus.disputed;
 
   const action = useAction(async () => {
     await api.refundEscrow(view.invoiceId, coinPublicKeyBytes);
@@ -474,8 +454,12 @@ const RefundEscrow = ({ api, view, onDone }: ActionProps): JSX.Element => {
       title="Refund escrow"
       description={
         passed
-          ? 'Take the escrowed coin back. The deadline has passed, so the contract allows it. It returns to the wallet connected here.'
-          : `Available only after the escrow deadline, ${formatDateTime(view.anchor.escrowDeadline)} (${relativeDays(view.anchor.escrowDeadline, now)}).`
+          ? stalled
+            ? 'This dispute was never resolved and the deadline has passed, so the contract lets you take the escrow back. The arbiter can no longer rule once you do.'
+            : 'Take the escrowed coin back. The deadline has passed, so the contract allows it. It returns to the wallet connected here.'
+          : stalled
+            ? `The arbiter can still rule. If they never do, this becomes available after the escrow deadline, ${formatDateTime(view.anchor.escrowDeadline)} (${relativeDays(view.anchor.escrowDeadline, now)}).`
+            : `Available only after the escrow deadline, ${formatDateTime(view.anchor.escrowDeadline)} (${relativeDays(view.anchor.escrowDeadline, now)}).`
       }
       buttonLabel="Refund to me"
       state={action.state}
@@ -486,10 +470,19 @@ const RefundEscrow = ({ api, view, onDone }: ActionProps): JSX.Element => {
         title: 'Refund the escrow to yourself?',
         confirmLabel: 'Refund',
         body: (
-          <p>
-            The coin comes back to the wallet connected here. The seller is not paid, and the
-            invoice ends as refunded.
-          </p>
+          <>
+            <p>
+              The coin comes back to the wallet connected here. The seller is not paid, and the
+              invoice ends as refunded.
+            </p>
+            {stalled && (
+              <p>
+                This invoice is under dispute and the arbiter has not ruled. Taking the refund ends
+                the dispute unresolved: the arbiter cannot rule afterwards, and the record will
+                show that nobody won rather than that you did.
+              </p>
+            )}
+          </>
         ),
       }}
       onRun={() => void action.run()}
@@ -636,7 +629,18 @@ const RevokeAudit = ({ api, view, onDone }: ActionProps): JSX.Element => {
 const ImportRecord = ({ api, view, onDone }: ActionProps): JSX.Element => {
   const [payload, setPayload] = useState('');
   const action = useAction(async () => {
-    await api.importInvoice(payload, view.role === 'observer' ? 'buyer' : view.role);
+    const stored = await api.importInvoice(payload, view.role === 'observer' ? 'buyer' : view.role);
+    // Filed under the id inside the record, not the invoice whose screen this
+    // card is on. Pasting the record for a different invoice -- easy, when a
+    // seller exports the wrong row -- used to turn this card green and leave the
+    // invoice above it exactly as sealed as before, with the same empty box
+    // underneath. It is imported either way, so this reports rather than undoes.
+    if (stored.invoiceId !== view.invoiceId) {
+      throw new Error(
+        `That record is for invoice ${truncateHex(stored.invoiceId, 8, 6)}, not this one. ` +
+          'It has been filed under its own invoice; this one is still sealed to you.',
+      );
+    }
     await onDone();
   }, 'Reading the record');
 
@@ -646,8 +650,10 @@ const ImportRecord = ({ api, view, onDone }: ActionProps): JSX.Element => {
       description={
         <>
           Paste the JSON the counterparty sent you. It carries the terms and the openings that
-          prove them against the commitments already on chain. Until it is here, this invoice
-          cannot be settled or audited by you.
+          are meant to prove them against the commitments already on chain. Nothing here checks
+          that they do: the first circuit call that uses them is what finds out, and a record
+          that does not open its invoice fails there. Until it is here, this invoice cannot be
+          settled or audited by you.
         </>
       }
       buttonLabel="Import"
@@ -740,7 +746,14 @@ export const InvoiceDetail = ({ invoiceId }: { readonly invoiceId: string }): JS
   const canCancel = role === 'seller' && status === InvoiceStatus.issued;
   const canFund = role === 'buyer' && status === InvoiceStatus.issued;
   const canRelease = role === 'buyer' && status === InvoiceStatus.escrowFunded;
-  const canRefund = role === 'buyer' && status === InvoiceStatus.escrowFunded;
+  // Also on a disputed invoice, which is the whole point of the rule the
+  // contract carries: `resolveDispute` is the only other way out of `disputed`
+  // and only the arbiter can call it, so an arbiter who stops answering would
+  // otherwise leave the money locked for good. The deadline is still enforced on
+  // chain, and the card below says what the button will and will not do.
+  const canRefund =
+    role === 'buyer' &&
+    (status === InvoiceStatus.escrowFunded || status === InvoiceStatus.disputed);
   const canDispute =
     (role === 'buyer' || role === 'seller') &&
     status === InvoiceStatus.escrowFunded &&
