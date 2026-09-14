@@ -603,6 +603,105 @@ describe('releasing an escrow', () => {
 });
 
 describe('refunding an escrow', () => {
+  /**
+   * The way out of a dispute nobody resolves.
+   *
+   * `resolveDispute` is the only other exit from `disputed` and only the named
+   * arbiter can call it, so an arbiter who loses their key or simply stops
+   * answering used to leave the escrow locked in that status permanently: no
+   * deadline reached it, no administrator could release it, and both parties
+   * could agree and still be unable to move the money.
+   */
+  it('returns the money when a dispute is never resolved and the deadline passes', async () => {
+    const f = await disputed();
+    const before = led(f.d).escrowVault.lookup(f.invoiceId).value;
+    expect(before).toBe(f.value);
+
+    const refunded = advance(
+      f.d,
+      f.d.contract.impureCircuits.refundEscrow(
+        ctx(f.d, f.buyer.state, f.deadline + 1n),
+        f.invoiceId,
+        f.buyer.pin,
+        TO_BUYER,
+      ),
+    );
+
+    const l = led(refunded);
+    expect(l.invoices.lookup(f.invoiceId).status).toBe(InvoiceStatus.refunded);
+    expect(l.escrowVault.member(f.invoiceId)).toBe(false);
+    // The dispute record stays undecided, because it was never decided. An
+    // invoice that timed out is a different fact from one that was ruled on, and
+    // the two should not read alike afterwards.
+    expect(l.disputes.lookup(f.invoiceId)).toBe(DisputeOutcome.undecided);
+    // Nobody lost. A timeout is not a verdict, so neither side carries a mark:
+    // the buyer has the entry that opening the dispute created and nothing in
+    // its lost column, and the seller has no entry at all.
+    expect(l.reliability.lookup(f.buyer.key).disputesOpened).toBe(1n);
+    expect(l.reliability.lookup(f.buyer.key).disputesLost).toBe(0n);
+    expect(l.reliability.member(f.seller.key)).toBe(false);
+  });
+
+  it('does not let a dispute be refunded before the deadline', async () => {
+    // Otherwise opening a dispute would be a way for the buyer to take the money
+    // back early, which is the opposite of what escalating is meant to do.
+    const f = await disputed();
+    expectThrows(
+      () =>
+        f.d.contract.impureCircuits.refundEscrow(
+          ctx(f.d, f.buyer.state, f.deadline),
+          f.invoiceId,
+          f.buyer.pin,
+          TO_BUYER,
+        ),
+      'escrow deadline has not passed',
+    );
+  });
+
+  it('leaves a resolved dispute alone, deadline or not', async () => {
+    // `resolveDispute` moves the escrow in the same call it records the ruling,
+    // so there is no window in which a decided dispute can be refunded out from
+    // under the party who won it.
+    const f = await disputed();
+    const arbiterState = stageFor(share(f.arbiter.state, f.stored), f.prepared);
+    const resolved = advance(
+      f.d,
+      f.d.contract.impureCircuits.resolveDispute(
+        ctx(f.d, arbiterState),
+        f.invoiceId,
+        f.arbiter.pin,
+        true,
+        TO_SELLER,
+        T0 + DAY,
+      ),
+    );
+
+    expectThrows(
+      () =>
+        resolved.contract.impureCircuits.refundEscrow(
+          ctx(resolved, f.buyer.state, f.deadline + 1n),
+          f.invoiceId,
+          f.buyer.pin,
+          TO_BUYER,
+        ),
+      'invoice has no funded escrow',
+    );
+  });
+
+  it('still refuses anyone but the buyer to refund a stalled dispute', async () => {
+    const f = await disputed();
+    expectThrows(
+      () =>
+        f.d.contract.impureCircuits.refundEscrow(
+          ctx(f.d, f.seller.state, f.deadline + 1n),
+          f.invoiceId,
+          f.seller.pin,
+          TO_SELLER,
+        ),
+      'caller is not the buyer',
+    );
+  });
+
   it('refuses a refund before the deadline has passed', async () => {
     const f = await funded();
 

@@ -996,6 +996,24 @@ export circuit releaseEscrow(
 // who pauses -- or who loses their key while paused -- would otherwise trap it
 // with no way out. A pause is an emergency stop on new business, not a freeze on
 // funds somebody is already owed back.
+//
+// It is also the way out of an abandoned dispute, and that is not a convenience.
+// `resolveDispute` is the only other exit from `disputed`, and only the named
+// arbiter can call it. An arbiter who loses their key, changes their mind or
+// simply stops answering left the escrow locked in that status for good: no
+// deadline reached it, no administrator could release it, and both parties could
+// agree and still be unable to move the money. A contract holding funds must
+// never have a state whose only exit depends on one party choosing to act.
+//
+// Letting the buyer refund an undecided dispute after the deadline does weaken
+// the seller, and it is worth being exact about how: a seller who has delivered
+// now needs the arbiter to rule before the deadline rather than at any time
+// afterwards. That is a real cost, and it is the smaller one. The deadline is
+// the buyer's money coming back, it is on the anchor in public before the seller
+// ships anything, and naming an arbiter was never a promise to give that up.
+// Once the arbiter rules, the ruling stands: `resolveDispute` moves the escrow
+// in the same call, so there is no window where a decided dispute can be
+// refunded out from under it.
 export circuit refundEscrow(
   invoiceId: Bytes<32>,
   buyerPin: Uint<64>,
@@ -1005,7 +1023,8 @@ export circuit refundEscrow(
 
   assert(invoices.member(id), "quietbooks: unknown invoice");
   const anchor = invoices.lookup(id);
-  assert(anchor.status == InvoiceStatus.escrowFunded, "quietbooks: invoice has no funded escrow");
+  assert(anchor.status == InvoiceStatus.escrowFunded || anchor.status == InvoiceStatus.disputed,
+         "quietbooks: invoice has no funded escrow");
 
   const buyerKey = callerKey(buyerPin);
   assert(disclose(buyerKey) == anchor.buyerKey, "quietbooks: caller is not the buyer");
