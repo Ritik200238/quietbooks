@@ -63,6 +63,13 @@ jobs:
       - name: Run the contract test suite
         run: npm test
 
+      - name: Check the tests would fail if the contract were wrong
+        # Reverts each security fix in the contract one at a time, recompiles,
+        # and checks the tests meant to be guarding it actually go red. Without
+        # this, deleting a rule and its test in the same commit is a green
+        # build. It exits non-zero if any reverted fix survives.
+        run: npm run test:mutation --workspace @quietbooks/contract
+
       - name: Typecheck every workspace
         run: npm run typecheck
 
