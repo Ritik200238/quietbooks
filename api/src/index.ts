@@ -257,6 +257,39 @@ export class QuietBooksAPI {
   }
 
   /**
+   * One private-state operation at a time.
+   *
+   * Everything that touches private state here is read-modify-write across an
+   * await, and two of them run for a minute or more because a proof is built in
+   * the middle. Nothing stopped them overlapping. Two reachable ways they did:
+   * pressing Issue and then navigating to another invoice and acting on it while
+   * the first proof was still building, which let the second call's staging
+   * overwrite the first's and the first's cleanup wipe the second's; and two
+   * browser tabs on the same deployment, where the later `issueInvoice` writes a
+   * snapshot it read before the earlier one saved, dropping an invoice's
+   * openings for good.
+   *
+   * Immutability does not help with this -- `withActive` returning a new state
+   * makes each write consistent and says nothing about which write lands last.
+   * What is needed is mutual exclusion, and a promise chain is the whole of it:
+   * each operation waits for the previous one to settle, in order, and a
+   * rejection does not break the chain for the next caller.
+   */
+  private stateLock: Promise<unknown> = Promise.resolve();
+
+  private exclusively<T>(body: () => Promise<T>): Promise<T> {
+    const run = this.stateLock.then(body, body);
+    // Swallowed on the chain only, never for the caller: the next operation
+    // should proceed whether or not this one failed, and this one's rejection
+    // still reaches whoever asked for it through `run`.
+    this.stateLock = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /**
    * Run `body` with `invoice`'s openings staged, and clear them afterwards.
    *
    * The staged state is persisted before the call because the proving flow reads
@@ -264,10 +297,11 @@ export class QuietBooksAPI {
    * not politeness: leaving openings armed would let the next unrelated call
    * silently prove against the wrong invoice.
    */
-  private async withStaged<T>(
-    invoiceId: string,
-    body: () => Promise<T>,
-  ): Promise<T> {
+  private withStaged<T>(invoiceId: string, body: () => Promise<T>): Promise<T> {
+    return this.exclusively(() => this.stageAndRun(invoiceId, body));
+  }
+
+  private async stageAndRun<T>(invoiceId: string, body: () => Promise<T>): Promise<T> {
     const state = await this.privateState();
     const stored = state.invoices[invoiceId];
     if (stored === undefined) {
@@ -378,8 +412,15 @@ export class QuietBooksAPI {
       role: 'seller',
     });
 
-    const base = await this.privateState();
-    await this.savePrivateState(withInvoice(base, stored));
+    // Filed before the transaction is submitted, not after, so a call that lands
+    // is always openable. Under the same lock as the staging below, because this
+    // is a read-modify-write across an await and a concurrent one would write
+    // back a snapshot taken before this invoice existed -- losing the openings
+    // permanently, which is the one failure in this file that cannot be undone.
+    await this.exclusively(async () => {
+      const base = await this.privateState();
+      await this.savePrivateState(withInvoice(base, stored));
+    });
 
     await this.withStaged(invoiceHex, async () => {
       try {
@@ -716,8 +757,13 @@ export class QuietBooksAPI {
       throw new QuietBooksError('shared invoice is not valid JSON', 'importInvoice', error);
     }
     const stored = { ...deserialiseStored(parsed), role };
-    const state = await this.privateState();
-    await this.savePrivateState(withInvoice(state, stored));
+    // The same read-modify-write, under the same lock. An import racing an issue
+    // would otherwise drop whichever invoice the loser of the race had just
+    // filed.
+    await this.exclusively(async () => {
+      const state = await this.privateState();
+      await this.savePrivateState(withInvoice(state, stored));
+    });
     return stored;
   }
 }
