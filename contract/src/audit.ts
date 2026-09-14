@@ -290,8 +290,37 @@ export type ValidationReport = {
  * This is the runtime function the generated contract calls, not a
  * reimplementation of it, so the two cannot drift.
  */
-const fieldNumber = (value: bigint): Uint8Array =>
-  convertFieldToBytes(BYTES32, value, 'quietbooks audit envelope');
+const fieldNumber = (value: bigint): Uint8Array => {
+  // Range-checked before encoding, which the runtime does not do.
+  //
+  // `convertFieldToBytes` walks the value a byte at a time and stops when the
+  // remainder reaches zero. On a negative bigint the mask yields the two's
+  // complement byte and the division truncates toward zero, so it returns early
+  // with no error -- and for every positive value there is a negative one with
+  // byte-identical output. 5,500,000 and -11,343,008 encode the same.
+  //
+  // That matters because this function is the one that runs on hostile input.
+  // An auditor's validator re-encodes a plaintext the sealer chose and compares
+  // it to the committed bytes; without this guard a genuine commitment to
+  // 5,500,000 opens against a plaintext reading minus eleven million, and every
+  // check passes. The circuit is safe only because Compact types its arguments.
+  if (value < 0n || value >= 1n << 256n) {
+    throw new AuditEnvelopeError(
+      'a numeric field value must be a non-negative integer that fits in 32 bytes',
+    );
+  }
+  return convertFieldToBytes(BYTES32, value, 'quietbooks audit envelope');
+};
+
+/**
+ * A decimal integer with exactly one spelling.
+ *
+ * `BigInt()` accepts `0x53E2D8`, `+5500000`, `005500000`, `"  5500000  "` and
+ * the empty string, all of which encode to bytes a genuine commitment opens
+ * against. An auditor reading the plaintext would see whichever of those the
+ * sealer chose, so the plaintext has to be canonical or it is not evidence.
+ */
+const CANONICAL_DECIMAL = /^(0|[1-9][0-9]*)$/;
 
 /** The exact 32 bytes each of the nine fields commits to, in scope order. */
 export const committedFieldValues = (frame: TermsFrame): Record<ScopeName, Uint8Array> => ({
@@ -420,6 +449,10 @@ const plaintextMismatch = async (
 
   let expected: Uint8Array;
   if (encoding === 'uint') {
+    // Canonical, or it is not evidence. See CANONICAL_DECIMAL.
+    if (!CANONICAL_DECIMAL.test(plaintext)) {
+      return `${scope} plaintext is not a canonical decimal integer`;
+    }
     expected = fieldNumber(BigInt(plaintext));
   } else if (encoding === 'ascii32') {
     expected = padBytes32(plaintext);
@@ -685,10 +718,44 @@ const asString = (value: unknown, what: string): string => {
 const isScopeName = (value: string): value is ScopeName =>
   (SCOPES as readonly string[]).includes(value);
 
+/**
+ * Refuse a record carrying anything we do not know about.
+ *
+ * Containment -- the check this whole format exists for -- is computed from what
+ * the parser found. A parser that quietly drops what it does not recognise makes
+ * that check a statement about the parser rather than about the envelope: the
+ * sealer holds the key, so they can add a field, have it survive decryption, and
+ * have containment never see it. An auditor then reads data outside their grant
+ * from a report that certifies the envelope as contained.
+ */
+const rejectUnknown = (
+  record: Record<string, unknown>,
+  allowed: readonly string[],
+  what: string,
+): void => {
+  const extra = Object.keys(record).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    throw new AuditEnvelopeError(`${what} carries unknown field(s): ${extra.join(', ')}`);
+  }
+};
+
+const PAYLOAD_KEYS = [
+  'invoiceId',
+  'scopeMask',
+  'disclosed',
+  'commitments',
+  'fieldRoot',
+  'termsCommitment',
+] as const;
+
+const DISCLOSED_FIELD_KEYS = ['value', 'salt', 'plaintext'] as const;
+
 const parsePayload = (value: unknown): AuditPayload => {
   const root = asRecord(value, 'the payload');
+  rejectUnknown(root, PAYLOAD_KEYS, 'the payload');
 
   const commitmentsRaw = asRecord(root.commitments, 'payload.commitments');
+  rejectUnknown(commitmentsRaw, SCOPES, 'payload.commitments');
   const commitments = {} as Record<ScopeName, string>;
   for (const scope of SCOPES) {
     commitments[scope] = asString(commitmentsRaw[scope], `payload.commitments.${scope}`);
@@ -701,6 +768,7 @@ const parsePayload = (value: unknown): AuditPayload => {
       throw new AuditEnvelopeError(`payload.disclosed names an unknown field "${key}"`);
     }
     const field = asRecord(disclosedRaw[key], `payload.disclosed.${key}`);
+    rejectUnknown(field, DISCLOSED_FIELD_KEYS, `payload.disclosed.${key}`);
     disclosed[key] = {
       value: asString(field.value, `payload.disclosed.${key}.value`),
       salt: asString(field.salt, `payload.disclosed.${key}.salt`),
@@ -935,11 +1003,19 @@ export const validateAuditEnvelope = async (
       );
     }
 
-    return pass(
-      carried.length === 0
-        ? 'the envelope discloses nothing'
-        : `discloses ${carried.join(', ')}, all within the grant`,
-    );
+    // An empty disclosure is refused, not waved through.
+    //
+    // The empty set is a subset of every grant, so containment passes on it for
+    // free -- and so does every other check, because the nine commitments and
+    // the field root are still genuine. A seller under pressure to show a clean
+    // audit can seal an envelope with `scopeMask: 0` and nothing inside it, and
+    // the validator prints PASS across the board having been shown nothing at
+    // all. `grantCovers` already refuses the empty request for the same reason;
+    // this is the same rule, applied where the report is produced.
+    if (carried.length === 0) {
+      return fail('the envelope discloses no field, so there is nothing for the grant to stand behind');
+    }
+    return pass(`discloses ${carried.join(', ')}, all within the grant`);
   });
 
   // (f) The ciphertext opens and the plaintext is the one the header vouches for.
@@ -975,30 +1051,41 @@ export const validateAuditEnvelope = async (
       if (field === undefined) continue;
       checked += 1;
 
-      const value = fromHex(field.value);
-      const salt = fromHex(field.salt);
-      if (value.length !== BYTES32 || salt.length !== BYTES32) {
-        problems.push(`${scope}: value and salt must both be ${BYTES32} bytes`);
-        continue;
-      }
-      const recomputed = pureCircuits.commitField(tags[scope], value, salt);
-      if (!bytesEqual(recomputed, fromHex(payload.commitments[scope]))) {
-        problems.push(`${scope}: the disclosed value and salt do not open its commitment`);
-        continue;
-      }
-      const mismatch = await plaintextMismatch(scope, field.plaintext, value);
-      if (mismatch !== null) {
-        problems.push(mismatch);
+      // Per field, because several of the calls below throw rather than return.
+      // `fromHex` rejects a malformed string, `commitField` rejects a bad
+      // length, and the plaintext re-encoding rejects an out-of-range number. An
+      // escaping throw ends the whole loop, so a single unparseable salt used to
+      // hide whatever was wrong with the other eight fields behind one
+      // "the check could not run" line.
+      try {
+        const value = fromHex(field.value);
+        const salt = fromHex(field.salt);
+        if (value.length !== BYTES32 || salt.length !== BYTES32) {
+          problems.push(`${scope}: value and salt must both be ${BYTES32} bytes`);
+          continue;
+        }
+        const recomputed = pureCircuits.commitField(tags[scope], value, salt);
+        if (!bytesEqual(recomputed, fromHex(payload.commitments[scope]))) {
+          problems.push(`${scope}: the disclosed value and salt do not open its commitment`);
+          continue;
+        }
+        const mismatch = await plaintextMismatch(scope, field.plaintext, value);
+        if (mismatch !== null) {
+          problems.push(mismatch);
+        }
+      } catch (error) {
+        problems.push(`${scope}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
     if (problems.length > 0) {
       return fail(problems.join('; '));
     }
+    if (checked === 0) {
+      return fail('no field was disclosed, so no commitment was opened');
+    }
     return pass(
-      checked === 0
-        ? 'no fields were disclosed, so there was nothing to open'
-        : `${checked} disclosed field${checked === 1 ? '' : 's'} open the recorded commitments`,
+      `${checked} disclosed field${checked === 1 ? '' : 's'} open the recorded commitments`,
     );
   });
 
