@@ -99,7 +99,20 @@ const crypto: Crypto = (globalThis as { crypto?: Crypto }).crypto ?? (webcrypto 
 // ---------------------------------------------------------------------------
 
 /** The only envelope format this module writes, and the only one it reads. */
-export const AUDIT_ENVELOPE_VERSION = 'quietbooks-audit/1';
+export const AUDIT_ENVELOPE_VERSION = 'quietbooks-audit/2';
+
+/**
+ * Formats this reader will not open.
+ *
+ * Version 1 authenticated seven header fields and left `integrity.payloadHash`
+ * outside the associated data, so a relay could flip a bit in it and make an
+ * honest seller's envelope report `payload-integrity` failure -- the check
+ * whose message accuses the sealer of forging their own document. It also
+ * accepted any JSON text that parsed, which let a duplicate key carry
+ * ungranted fields past the containment check. Neither is fixable by reading a
+ * version 1 envelope more carefully, so they are refused by name.
+ */
+const RETIRED_VERSIONS: readonly string[] = ['quietbooks-audit/1'];
 
 /**
  * GCM's standard nonce width. Twelve bytes is the size the construction is
@@ -544,6 +557,19 @@ type EnvelopeHeader = {
   readonly scopeMask: number;
   readonly expiresAt: string;
   readonly auditKeyHash: string;
+  /**
+   * `integrity.payloadHash`, authenticated along with the rest.
+   *
+   * It lives under `integrity` on the wire and is bound here, which is not a
+   * contradiction: what the associated data covers is a set of values, not a
+   * shape. Leaving it out meant a relay could flip one hex character and turn a
+   * valid envelope into one reporting "the payload hash in the envelope is not
+   * the hash of the sealed payload" -- a message that reads as the seller
+   * having forged their own document. A third party could make an honest party
+   * look dishonest, which is a worse failure than the one the hash exists to
+   * catch.
+   */
+  readonly payloadHash: string;
 };
 
 /**
@@ -567,6 +593,7 @@ const headerOf = (envelope: AuditEnvelope): EnvelopeHeader => ({
   scopeMask: envelope.scopeMask,
   expiresAt: envelope.expiresAt,
   auditKeyHash: envelope.auditKeyHash,
+  payloadHash: envelope.integrity?.payloadHash,
 });
 
 // ---------------------------------------------------------------------------
@@ -662,6 +689,7 @@ export const buildAuditEnvelope = async (args: BuildAuditEnvelopeArgs): Promise<
     scopeMask: payload.scopeMask,
     expiresAt: args.expiresAt.toString(),
     auditKeyHash: toHex(await auditKeyHash(args.auditKey)),
+    payloadHash: toHex(payloadHash),
   };
 
   const iv = new Uint8Array(IV_BYTES);
@@ -685,15 +713,20 @@ export const buildAuditEnvelope = async (args: BuildAuditEnvelopeArgs): Promise<
   // will have seen.
   const split = sealed.length - TAG_BYTES;
 
+  // `payloadHash` travels under `integrity`, where an auditor expects it, rather
+  // than twice. `headerOf` reads it back from there when rebuilding the
+  // associated data.
+  const { payloadHash: sealedHash, ...wire } = header;
+
   return {
-    ...header,
+    ...wire,
     encryption: {
       algorithm: 'AES-256-GCM',
       iv: toHex(iv),
       authTag: toHex(sealed.subarray(split)),
       ciphertext: toBase64(sealed.subarray(0, split)),
     },
-    integrity: { payloadHash: toHex(payloadHash) },
+    integrity: { payloadHash: sealedHash },
   };
 };
 
@@ -799,7 +832,54 @@ type Opened = {
   readonly payload: AuditPayload;
 };
 
+/** The complete set of fields an envelope may carry, at each level. */
+const ENVELOPE_KEYS = [
+  'version',
+  'invoiceId',
+  'network',
+  'contractAddress',
+  'scopeMask',
+  'expiresAt',
+  'auditKeyHash',
+  'encryption',
+  'integrity',
+] as const;
+
+const ENCRYPTION_KEYS = ['algorithm', 'iv', 'authTag', 'ciphertext'] as const;
+const INTEGRITY_KEYS = ['payloadHash'] as const;
+
+/**
+ * Refuse an envelope carrying anything this format does not define.
+ *
+ * The payload has been checked this way since the containment hole was found;
+ * the envelope never was, and it is the half that travels in the clear. So a
+ * `sellerNote` reading "amount 5,500,000; memo Q3 retainer" sat in the open
+ * beside a report that said the disclosure was contained, and the interface
+ * handed the whole object to the auditor. Worse than the payload case in one
+ * respect: cleartext keys are outside the associated data, so anyone relaying
+ * the envelope could add them, not only the party who sealed it.
+ */
+const assertEnvelopeShape = (envelope: AuditEnvelope): void => {
+  const root = envelope as unknown as Record<string, unknown>;
+  rejectUnknown(root, ENVELOPE_KEYS, 'the envelope');
+  if (root.encryption !== null && typeof root.encryption === 'object') {
+    rejectUnknown(root.encryption as Record<string, unknown>, ENCRYPTION_KEYS, 'encryption');
+  }
+  if (root.integrity !== null && typeof root.integrity === 'object') {
+    rejectUnknown(root.integrity as Record<string, unknown>, INTEGRITY_KEYS, 'integrity');
+  }
+};
+
 const openSealed = async (envelope: AuditEnvelope, auditKey: Uint8Array): Promise<Opened> => {
+  assertEnvelopeShape(envelope);
+
+  if (RETIRED_VERSIONS.includes(envelope.version)) {
+    throw new AuditEnvelopeError(
+      `envelope format "${envelope.version}" is retired and this reader will not open it. ` +
+        'Ask the seller to seal it again.',
+    );
+  }
+
   const encryption = envelope.encryption;
   if (encryption === undefined || encryption === null) {
     throw new AuditEnvelopeError('the envelope carries no encryption block');
@@ -845,12 +925,39 @@ const openSealed = async (envelope: AuditEnvelope, auditKey: Uint8Array): Promis
   }
 
   const bytes = new Uint8Array(clear);
+  const text = new TextDecoder().decode(bytes);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(new TextDecoder().decode(bytes));
+    parsed = JSON.parse(text);
   } catch {
     throw new AuditEnvelopeError('the envelope decrypted but its payload is not JSON');
   }
+
+  // The payload has to BE its canonical form, not merely parse to it.
+  //
+  // Every check in this file is computed from the parsed object, and the parsed
+  // object is not the document the auditor receives. `JSON.parse` keeps the last
+  // of two identical keys and silently discards the first, so a sealer -- who
+  // holds the key, and is the adversary containment exists to stop -- could
+  // write `"disclosed"` twice: an object full of ungranted fields first, the one
+  // granted field second. Containment saw one field and passed. The auditor
+  // decrypted the text and read all of them, with openings that verify against
+  // the commitments on chain, in a document this validator had certified as
+  // contained.
+  //
+  // `rejectUnknown` cannot catch that, because it also runs on the parsed
+  // object. Nothing that inspects the parse can, which is why this compares the
+  // bytes instead. Re-serialising what we parsed and requiring it to equal what
+  // we decrypted closes the whole class at once: a duplicate key cannot survive
+  // the round trip, and neither can padding, key order, or a string spelled with
+  // unicode escapes. One document, one reading of it.
+  if (canonicalJson(parsed) !== text) {
+    throw new AuditEnvelopeError(
+      'the sealed payload is not in canonical form, so what it parses to is not ' +
+        'what it says. An envelope has to be exactly the document its hash covers.',
+    );
+  }
+
   return { bytes, payload: parsePayload(parsed) };
 };
 
@@ -1131,6 +1238,29 @@ export const validateAuditEnvelope = async (
  * A clean report contains no occurrence of the word FAIL, so a human skimming a
  * long log, or a script grepping one, cannot mistake a pass for a failure.
  */
+/**
+ * One line of report detail, with the parts an attacker chose made inert.
+ *
+ * A failing check quotes the value that failed -- the version string, the
+ * algorithm name, an unknown field's name -- and those values come from the
+ * envelope. Printed as they arrive, a version string carrying a newline and a
+ * fabricated `[PASS] envelope-version` row adds a line to the report that says
+ * the opposite of the line above it, and an ANSI escape does better than that:
+ * `ESC [ 2K CR` erases the FAIL line and redraws it as a PASS.
+ *
+ * The guarantee this file states is that a clean report contains no failure. A
+ * report is also read by a person, so the guarantee has to hold the other way
+ * too: a dirty report must not be renderable as a clean one. Newlines, carriage
+ * returns and control bytes go; anything longer than a glance is cut.
+ */
+const SAFE_DETAIL = 200;
+
+const sanitiseDetail = (detail: string): string => {
+  // eslint-disable-next-line no-control-regex
+  const flattened = detail.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ');
+  return flattened.length > SAFE_DETAIL ? `${flattened.slice(0, SAFE_DETAIL)}...` : flattened;
+};
+
 export const formatValidationReport = (report: ValidationReport): string => {
   const width = report.checks.reduce((widest, check) => Math.max(widest, check.name.length), 0);
   const passed = report.checks.filter((check) => check.ok).length;
@@ -1140,7 +1270,8 @@ export const formatValidationReport = (report: ValidationReport): string => {
     `QuietBooks audit envelope: ${report.ok ? 'PASS' : 'FAIL'}`,
     '',
     ...report.checks.map(
-      (check) => `  [${check.ok ? 'PASS' : 'FAIL'}] ${check.name.padEnd(width)}  ${check.detail}`,
+      (check) =>
+        `  [${check.ok ? 'PASS' : 'FAIL'}] ${check.name.padEnd(width)}  ${sanitiseDetail(check.detail)}`,
     ),
     '',
     `${passed} of ${total} check${total === 1 ? '' : 's'} passed.`,

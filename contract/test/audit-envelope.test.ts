@@ -211,7 +211,7 @@ const flipBase64 = (text: string): string => (text[0] === 'A' ? 'B' : 'A') + tex
  * format from the outside. If the header's key set ever changes, the re-sealing
  * tests fail, which is the signal we want.
  */
-const headerJson = (envelope: AuditEnvelope): string =>
+const headerJson = (envelope: AuditEnvelope, payloadHash: string): string =>
   canonicalJson({
     version: envelope.version,
     invoiceId: envelope.invoiceId,
@@ -220,6 +220,12 @@ const headerJson = (envelope: AuditEnvelope): string =>
     scopeMask: envelope.scopeMask,
     expiresAt: envelope.expiresAt,
     auditKeyHash: envelope.auditKeyHash,
+    // Passed in rather than read off the envelope, because a re-seal produces a
+    // new payload and therefore a new hash, and the hash is authenticated: the
+    // associated data has to carry the one being sealed under, not the one the
+    // envelope arrived with. When this field was added to the header, every
+    // re-sealing test failed at once .. which is what the note above promises.
+    payloadHash,
   });
 
 /**
@@ -233,8 +239,18 @@ const reseal = async (
   envelope: AuditEnvelope,
   auditKey: Uint8Array,
   payload: AuditPayload,
+  /**
+   * Claim a payload hash other than the true one.
+   *
+   * Only a party holding the key can do this, because the hash is inside the
+   * associated data: a relay that edits it breaks decryption instead. It is the
+   * one remaining way to reach the payload-integrity check, which is what that
+   * check is for.
+   */
+  claimedHash?: string,
 ): Promise<AuditEnvelope> => {
   const bytes = new TextEncoder().encode(canonicalJson(payload));
+  const payloadHash = claimedHash ?? toHex(await sha256(bytes));
   const iv = randomBytes32().subarray(0, 12);
   const key = await crypto.subtle.importKey(
     'raw',
@@ -249,7 +265,9 @@ const reseal = async (
         name: 'AES-GCM',
         iv: iv as unknown as BufferSource,
         tagLength: 128,
-        additionalData: new TextEncoder().encode(headerJson(envelope)) as unknown as BufferSource,
+        additionalData: new TextEncoder().encode(
+          headerJson(envelope, payloadHash),
+        ) as unknown as BufferSource,
       },
       key,
       bytes as unknown as BufferSource,
@@ -261,7 +279,7 @@ const reseal = async (
   next.encryption.iv = toHex(iv);
   next.encryption.authTag = toHex(out.subarray(split));
   next.encryption.ciphertext = Buffer.from(out.subarray(0, split)).toString('base64');
-  next.integrity.payloadHash = toHex(await sha256(bytes));
+  next.integrity.payloadHash = payloadHash;
   return sealed(next);
 };
 
@@ -650,6 +668,150 @@ describe('each scope can be disclosed on its own', () => {
 // Validation, failure paths
 // ---------------------------------------------------------------------------
 
+/**
+ * A sealer who writes the payload text by hand.
+ *
+ * `reseal` goes through `canonicalJson`, which is `JSON.stringify` over a
+ * JavaScript object -- and a JavaScript object cannot have the same key twice.
+ * So the whole suite was structurally unable to express the attack below: not
+ * because anyone decided it was out of scope, but because the tool used to build
+ * hostile envelopes could not build that one.
+ *
+ * This seals arbitrary bytes instead.
+ */
+const sealText = async (
+  envelope: AuditEnvelope,
+  auditKey: Uint8Array,
+  text: string,
+): Promise<AuditEnvelope> => {
+  const bytes = new TextEncoder().encode(text);
+  const payloadHash = toHex(await sha256(bytes));
+  const iv = randomBytes32().subarray(0, 12);
+  const key = await crypto.subtle.importKey(
+    'raw',
+    auditKey as unknown as BufferSource,
+    'AES-GCM',
+    false,
+    ['encrypt'],
+  );
+  const out = new Uint8Array(
+    await crypto.subtle.encrypt(
+      {
+        name: 'AES-GCM',
+        iv: iv as unknown as BufferSource,
+        tagLength: 128,
+        additionalData: new TextEncoder().encode(
+          headerJson(envelope, payloadHash),
+        ) as unknown as BufferSource,
+      },
+      key,
+      bytes as unknown as BufferSource,
+    ),
+  );
+  const split = out.length - 16;
+  const next = mutable(envelope);
+  next.encryption.iv = toHex(iv);
+  next.encryption.authTag = toHex(out.subarray(split));
+  next.encryption.ciphertext = Buffer.from(out.subarray(0, split)).toString('base64');
+  next.integrity.payloadHash = payloadHash;
+  return sealed(next);
+};
+
+describe('a payload that is not what it parses to', () => {
+  /**
+   * The attack every other test in this file was unable to write.
+   *
+   * `JSON.parse` keeps the last of two identical keys and drops the first
+   * without a word. Every check in `audit.ts` reads the parsed object, so a
+   * sealer could put an object full of ungranted fields under the first
+   * `"disclosed"` and the one field they were granted under the second: the
+   * containment check counted one field and passed, while the auditor decrypted
+   * the text and read all of them.
+   *
+   * The fields smuggled this way are not decoration. They carry real salts, so
+   * they open the real commitments the chain has held since issuance -- the
+   * auditor ends up with cryptographic proof of an amount they were never
+   * granted, inside a document the validator called contained.
+   */
+  it('refuses a payload carrying the same key twice', async () => {
+    const f = await fixture({ scopes: scopesFrom(['currency']), granted: scopesFrom(['currency']) });
+    const full = await fixture();
+    const everything = await openAuditEnvelope(full.envelope, full.auditKey);
+    const granted = await openAuditEnvelope(f.envelope, f.auditKey);
+
+    // Ungranted fields first, the granted one second. A parser keeps the second.
+    const smuggled =
+      '{"disclosed":' +
+      JSON.stringify(everything.disclosed) +
+      ',' +
+      canonicalJson({ ...granted, disclosed: undefined }).slice(1, -1).replace(/^,/, '') +
+      ',"disclosed":' +
+      JSON.stringify(granted.disclosed) +
+      '}';
+
+    const forged = await sealText(f.envelope, f.auditKey, smuggled);
+    const report = await validate(f, { envelope: forged });
+    expect(report.ok).toBe(false);
+    // It fails before any check can be computed from it, which is the point: the
+    // document is refused for not being a single document.
+    expect(report.checks.some((check) => check.detail.includes('canonical form'))).toBe(true);
+  });
+
+  it('refuses a payload with whitespace the hash covers and the parser ignores', async () => {
+    // The same seam, smaller. Two byte-distinct payloads that parse identically
+    // would each have their own valid `payloadHash`, so the hash would not
+    // identify a unique disclosure.
+    const f = await fixture();
+    const payload = await openAuditEnvelope(f.envelope, f.auditKey);
+    const padded = JSON.stringify(payload, null, 2);
+    const forged = await sealText(f.envelope, f.auditKey, padded);
+    const report = await validate(f, { envelope: forged });
+    expect(report.ok).toBe(false);
+  });
+
+  it('accepts the canonical form of the same payload', async () => {
+    // The other direction, so the check above cannot pass by rejecting
+    // everything: re-sealing the identical payload through the canonical
+    // serialiser still validates.
+    const f = await fixture();
+    const payload = await openAuditEnvelope(f.envelope, f.auditKey);
+    const resealed = await sealText(f.envelope, f.auditKey, canonicalJson(payload));
+    const report = await validate(f, { envelope: resealed });
+    expect(report.ok).toBe(true);
+  });
+});
+
+describe('an envelope carrying more than the format defines', () => {
+  it('refuses a cleartext field beside the sealed payload', async () => {
+    // Outside the ciphertext and outside the associated data, so this is the one
+    // kind of smuggling a relay can do as easily as the sealer. It used to
+    // validate clean, with the disclosure sitting in the open next to a report
+    // saying the envelope was contained.
+    const f = await fixture();
+    const next = mutable(f.envelope) as unknown as Record<string, unknown>;
+    next.sellerNote = 'amount 5,500,000; memo "Q3 retainer, net 30"';
+    const report = await validate(f, { envelope: next as unknown as AuditEnvelope });
+    expect(report.ok).toBe(false);
+    expect(report.checks.some((check) => check.detail.includes('sellerNote'))).toBe(true);
+  });
+
+  it('refuses an unknown field inside the encryption block', async () => {
+    const f = await fixture();
+    const next = mutable(f.envelope);
+    (next.encryption as unknown as Record<string, unknown>).keyHint = 'the usual one';
+    const report = await validate(f, { envelope: sealed(next) });
+    expect(report.ok).toBe(false);
+  });
+
+  it('refuses an envelope in the retired format', async () => {
+    const f = await fixture();
+    const next = mutable(f.envelope);
+    next.version = 'quietbooks-audit/1';
+    const report = await validate(f, { envelope: sealed(next) });
+    expect(report.ok).toBe(false);
+  });
+});
+
 describe('rejecting an envelope the grant does not stand behind', () => {
   it('rejects an envelope format it does not recognise', async () => {
     const f = await fixture();
@@ -817,12 +979,32 @@ describe('rejecting an envelope the grant does not stand behind', () => {
     expect(checkNamed(report, AUDIT_CHECKS.payloadIntegrity).detail).toContain('did not decrypt');
   });
 
-  it('rejects a payload hash that is not the hash of the sealed payload', async () => {
+  it('rejects a payload hash the sealer got wrong on purpose', async () => {
+    // Sealed under the wrong hash rather than edited afterwards, because the
+    // hash is authenticated now: only the party holding the key can produce an
+    // envelope that decrypts and still misreports what it contains. That is the
+    // only remaining way to reach this check, and it is the case the check is
+    // about -- a sealer whose document does not describe itself.
+    const f = await fixture();
+    const payload = copyPayload(await openAuditEnvelope(f.envelope, f.auditKey));
+    const forged = await reseal(f.envelope, f.auditKey, payload, toHex(bytes32(0x5e)));
+    const report = await validate(f, { envelope: forged });
+    onlyFailure(report, AUDIT_CHECKS.payloadIntegrity);
+  });
+
+  it('refuses an envelope whose payload hash was edited in transit', async () => {
+    // The same edit by somebody who does not hold the key. It used to produce a
+    // payload-integrity failure, whose message says the payload does not match
+    // its own hash -- so a relay could flip one character and make an honest
+    // seller look like they had forged the document. Binding the hash into the
+    // associated data turns it into what it actually is: tampering, reported as
+    // a failure to decrypt.
     const f = await fixture();
     const next = mutable(f.envelope);
     next.integrity.payloadHash = toHex(bytes32(0x5e));
     const report = await validate(f, { envelope: sealed(next) });
-    onlyFailure(report, AUDIT_CHECKS.payloadIntegrity);
+    expect(report.ok).toBe(false);
+    expect(checkNamed(report, AUDIT_CHECKS.payloadIntegrity).detail).toContain('did not decrypt');
   });
 
   it('rejects a payload sealed for a different invoice than the envelope names', async () => {
