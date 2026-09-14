@@ -537,6 +537,58 @@ const Report = ({
         </table>
       </div>
 
+      {report.disclosed !== undefined && (
+        <div className="panel">
+          <div className="panel-head">
+            <h3>What this envelope discloses</h3>
+          </div>
+          <div className="panel-body">
+            <p className="note">
+              Shown only because every check above passed. Each value opens the commitment
+              beside it, and that commitment is one of the nine the chain has held for this
+              invoice since the day it was issued &mdash; so this is not the seller&rsquo;s word
+              for what the invoice said, it is the invoice.
+            </p>
+            <div className="table-scroll">
+              <table className="ledger">
+                <thead>
+                  <tr>
+                    <th scope="col">Field</th>
+                    <th scope="col">Value</th>
+                    <th scope="col">Opens the commitment</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {SCOPES.filter((scope) => report.disclosed?.[scope] !== undefined).map(
+                    (scope) => {
+                      const field = report.disclosed![scope]!;
+                      return (
+                        <tr key={scope}>
+                          <td>
+                            {SCOPE_LABELS[scope].title}{' '}
+                            <span className="quiet mono">{scope}</span>
+                          </td>
+                          <td className={field.plaintext === null ? 'mono muted' : 'figure'}>
+                            {/* A hashed field has no plaintext to show. The
+                                commitment still verifies, which is the whole
+                                point of granting one: an auditor can confirm the
+                                memo they were shown out of band is the memo the
+                                invoice committed to, without the memo ever
+                                having been on chain. */}
+                            {field.plaintext ?? 'hashed — no plaintext in the envelope'}
+                          </td>
+                          <td className="mono">{truncateHex(field.commitment, 10, 6)}</td>
+                        </tr>
+                      );
+                    },
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       <dl className="facts">
         <dt>Invoice</dt>
         <dd className="mono">{truncateHex(envelope.invoiceId, 16, 10)}</dd>

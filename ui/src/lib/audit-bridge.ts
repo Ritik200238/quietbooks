@@ -60,9 +60,25 @@ export type Check = {
   readonly detail: string;
 };
 
+/** One field an envelope discloses, as a reader should see it. */
+export type DisclosedValue = {
+  readonly plaintext: string | null;
+  readonly commitment: string;
+};
+
 export type ValidationReport = {
   readonly ok: boolean;
   readonly checks: readonly Check[];
+  /**
+   * Present only when every check passed.
+   *
+   * The interface reads fields from here and from nowhere else. The other way
+   * to get them is `openAuditEnvelope`, which decrypts without a grant, an
+   * anchor or a clock and hands back everything in the ciphertext -- so a screen
+   * built on that would be showing an auditor fields the grant may not cover,
+   * under a report that says the envelope is contained.
+   */
+  readonly disclosed?: Readonly<Partial<Record<ScopeName, DisclosedValue>>>;
 };
 
 export type BuildAuditEnvelopeArgs = {

@@ -298,6 +298,30 @@ export type Check = {
 export type ValidationReport = {
   readonly ok: boolean;
   readonly checks: readonly Check[];
+  /**
+   * What the envelope discloses, present only when every check passed.
+   *
+   * The point of the format is that an auditor reads a number. Until this
+   * existed the only way to read one was `openAuditEnvelope`, which decrypts and
+   * returns whatever is in the ciphertext without a grant, an anchor or a clock
+   * -- so any tool that wanted to show the auditor a field had to use the
+   * unchecked path, and containment was advisory by construction. The interface
+   * dodged it by showing the auditor nothing at all, which is worse: a validator
+   * that says an envelope is sound and does not say what it contains has done
+   * half a job.
+   *
+   * Undefined on failure, and undefined is the only safe reading of a failed
+   * envelope. A caller cannot show a field it was not handed.
+   */
+  readonly disclosed?: Readonly<Partial<Record<ScopeName, DisclosedValue>>>;
+};
+
+/** One field an envelope discloses, as a reader should see it. */
+export type DisclosedValue = {
+  /** The plaintext, for the fields that have one. Hashed fields have none. */
+  readonly plaintext: string | null;
+  /** The commitment on chain that this value opens. */
+  readonly commitment: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -995,7 +1019,15 @@ const openSealed = async (envelope: AuditEnvelope, auditKey: Uint8Array): Promis
   return { bytes, payload: parsePayload(parsed) };
 };
 
-/** Decrypt and parse. Throws when the key is wrong or the envelope was altered. */
+/**
+ * Decrypt and parse. Throws when the key is wrong or the envelope was altered.
+ *
+ * This checks nothing about the grant, the anchor or the clock, because it has
+ * none of them: it is the raw read that `validateAuditEnvelope` is built on, and
+ * it hands back every field inside the ciphertext whether or not the grant
+ * covered it. Do not show its result to anybody. The fields a reader may
+ * actually see come back on a passing `ValidationReport` as `disclosed`.
+ */
 export const openAuditEnvelope = async (
   envelope: AuditEnvelope,
   auditKey: Uint8Array,
@@ -1259,7 +1291,21 @@ export const validateAuditEnvelope = async (
     return pass('the commitments fold to the field root and terms commitment on chain');
   });
 
-  return { ok: checks.every((check) => check.ok), checks };
+  const ok = checks.every((check) => check.ok);
+  if (!ok || opened === null) {
+    return { ok, checks };
+  }
+
+  // Assembled from the payload only after every check passed, so what a caller
+  // renders is what the checks were about.
+  const disclosed: Partial<Record<ScopeName, DisclosedValue>> = {};
+  for (const scope of SCOPES) {
+    const field = opened.payload.disclosed[scope];
+    if (field !== undefined) {
+      disclosed[scope] = { plaintext: field.plaintext, commitment: field.value };
+    }
+  }
+  return { ok, checks, disclosed };
 };
 
 // ---------------------------------------------------------------------------
