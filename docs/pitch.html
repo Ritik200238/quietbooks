@@ -400,7 +400,7 @@
     <div class="title-meta">
       <span><b>Contract</b> Compact 0.23</span>
       <span><b>Entry points</b> 12, compiling</span>
-      <span><b>Tests</b> 194 passing</span>
+      <span><b>Tests</b> 238 passing</span>
       <span><b>End to end</b> 21/21 on a live node</span>
       <span><b>Licence</b> Apache-2.0</span>
     </div>
@@ -530,10 +530,49 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 5 -->
+  <!-- 6 -->
   <section class="slide">
     <div class="slide-head">
       <span class="num">05</span>
+      <h2>The tests that passed against a prover that never lied</h2>
+    </div>
+    <p class="lead">The same blind spot as the last slide, one layer in. A green suite is
+      evidence about the inputs it was given, and every input came from software that was
+      trying to be correct.</p>
+    <p>A witness in Compact is a private input the caller's own machine produces. The chain
+      never validates it. <code>contract/src/witnesses.ts</code> is the honest implementation
+      that ships, and an attacker writes their own. Every test in the suite ran that honest
+      copy, so no test had ever watched the contract face a lie.</p>
+    <p><code>settleWithNote</code> read the invoice terms from the witness twice: once to
+      prove they open the commitment the chain has held since issuance, and once to check the
+      coin against the amount. Two calls, two independent private inputs. The buyer proved
+      the real terms to the first and handed the second a one-unit invoice.</p>
+    <pre class="transcript"><b>settle a 6,050,000 invoice</b>  paying 1 unit          <b>ACCEPTED</b>
+  read 1 -&gt; real terms       commitment check passes
+  read 2 -&gt; amount: 1        value check passes
+  ledger: status settled, seller reliability +1 on time</pre>
+    <div class="cols two">
+      <div class="panel">
+        <h3>How it was found</h3>
+        <p>Mutation testing. Revert a fix, recompile, and check the suite actually goes red.
+          <code>compact compile --skip-zk</code> produces a contract file byte-identical to
+          the shipped build, so a mutant costs eight seconds. Thirteen of fourteen reverted
+          fixes failed a test. This one did not.</p>
+      </div>
+      <div class="panel">
+        <h3>What was written because of it</h3>
+        <p><code>hostile-witness.test.ts</code> drives the contract behind provers that lie.
+          The strongest test asserts that every circuit which opens the terms asks the prover
+          <em>exactly once</em> &mdash; the invariant itself, not one consequence of it.
+          Eighteen of eighteen reverted fixes now fail a test.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="slide">
+    <div class="slide-head">
+      <span class="num">06</span>
       <h2>Three ways to settle, and what each one costs you</h2>
     </div>
     <div class="table-wrap">
@@ -572,10 +611,10 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 6 -->
+  <!-- 8 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">06</span>
+      <span class="num">07</span>
       <h2>Selective audit, checked eight ways</h2>
     </div>
     <p>The seller grants one auditor specific fields of one invoice until a chosen date.
@@ -603,10 +642,10 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 7 -->
+  <!-- 9 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">07</span>
+      <span class="num">08</span>
       <h2>A payment record the party cannot write themselves</h2>
     </div>
     <p class="lead">The contract keeps counts, and only counts, against each party key:
@@ -622,10 +661,10 @@ instance of the same contract in the same segment.</pre>
       visible history.</p>
   </section>
 
-  <!-- 8 -->
+  <!-- 10 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">08</span>
+      <span class="num">09</span>
       <h2>Why twelve entry points, and how we knew</h2>
     </div>
     <p class="lead">A deploy carries one verifier key per entry point and has to fit inside
@@ -665,10 +704,10 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 9 -->
+  <!-- 11 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">09</span>
+      <span class="num">10</span>
       <h2>Identity without <code>msg.sender</code></h2>
     </div>
     <div class="cols two">
@@ -689,17 +728,17 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 10 -->
+  <!-- 12 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">10</span>
+      <span class="num">11</span>
       <h2>Evidence, not adjectives</h2>
     </div>
     <div class="figures">
       <div class="figure"><span class="n">12</span><span class="l">entry points compiling, with proving and verifying keys</span></div>
-      <div class="figure"><span class="n">194</span><span class="l">tests passing against the compiled contract</span></div>
+      <div class="figure"><span class="n">238</span><span class="l">tests passing against the compiled contract</span></div>
       <div class="figure"><span class="n">21/21</span><span class="l">end-to-end steps on a live node with real proofs</span></div>
-      <div class="figure"><span class="n">0.31.1</span><span class="l">Compact toolchain, pinned in CI</span></div>
+      <div class="figure"><span class="n">18/18</span><span class="l">reverted fixes that a test catches, checked by recompiling each one</span></div>
     </div>
     <p>The end-to-end run deploys to a real Midnight node, then drives the whole business
       flow and checks every step against state read back through the indexer rather than
@@ -741,16 +780,16 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 11 -->
+  <!-- 13 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">11</span>
+      <span class="num">12</span>
       <h2>What is not built</h2>
     </div>
     <p class="lead">A roadmap that lists only wins is not a roadmap.</p>
     <ul class="plain">
       <li><b>Nothing issues in a token other than the native shielded one.</b> The contract binds each invoice to the token it is payable in and refuses any other, but neither interface offers a way to pick that token at issue time. The enforcement is real and tested; the choice is not yet offered.</li>
-      <li><b>Paying a seller you have never paid needs one thing out of band.</b> A shielded output is encrypted to its recipient, so the payer needs the seller's Zswap <em>encryption</em> key as well as the coin public key that names them. The API takes it; the invoice does not yet carry it.</li>
+      <li><b>The end-to-end run uses one wallet for every role.</b> Seller, buyer and arbiter are three PINs of the same wallet. That is a real test of the authorisation rules and a poor test of payment: paying the wrong party is structurally invisible when every party is you. The circuit tests cover the binding and the mutation sweep confirms they bite; a genuine two-wallet run against the node is not built.</li>
       <li><b>The reliability threshold proof.</b> Written and tested, deferred to Wave 2 for the block-budget reason above. The counters it proves over are already being kept.</li>
       <li><b>Administrator rotation.</b> Removed for the same reason. The administrator is fixed at deploy; the emergency stop still works.</li>
       <li><b>Local proof server.</b> Every user needs one running. True of every Midnight DApp today; in-browser proving is the fix when it reaches the wallet.</li>
@@ -758,10 +797,10 @@ instance of the same contract in the same segment.</pre>
     </ul>
   </section>
 
-  <!-- 12 -->
+  <!-- 14 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">12</span>
+      <span class="num">13</span>
       <h2>Built on the ecosystem, and says so</h2>
     </div>
     <div class="cols">
@@ -789,10 +828,10 @@ instance of the same contract in the same segment.</pre>
       can check the originals.</p>
   </section>
 
-  <!-- 13 -->
+  <!-- 15 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">13</span>
+      <span class="num">14</span>
       <h2>Who this is for</h2>
     </div>
     <div class="cols two">
