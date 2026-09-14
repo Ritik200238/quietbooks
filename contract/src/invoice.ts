@@ -87,6 +87,23 @@ export type InvoiceDraft = {
    * unset it is the native shielded token.
    */
   readonly tokenType?: Uint8Array;
+  /**
+   * Where the seller is paid: their Zswap coin public key, 32 bytes.
+   *
+   * Not the party key on the invoice. A party key is a hash of a secret and
+   * nothing can be paid to it. The paying circuits compare the recipient against
+   * this, so an invoice issued without it cannot be settled, and one issued with
+   * it cannot be redirected.
+   */
+  readonly sellerPayout: Uint8Array;
+  /**
+   * Where the buyer is paid when an arbiter rules in their favour.
+   *
+   * The seller has to ask for it before issuing, alongside the buyer's party
+   * key. Left unset it is zero, which means a dispute cannot be resolved for the
+   * buyer -- so an invoice with an arbiter should always carry one.
+   */
+  readonly buyerPayout?: Uint8Array;
   readonly lineItems: readonly LineItem[];
   /** Tax on top of the line-item subtotal, in the smallest unit. */
   readonly taxAmount: bigint;
@@ -148,6 +165,8 @@ export const prepareInvoice = async (draft: InvoiceDraft): Promise<PreparedInvoi
     taxAmount: draft.taxAmount,
     currency: currencyCode(draft.currency),
     tokenType: draft.tokenType ?? NATIVE_SHIELDED_TOKEN,
+    sellerPayout: assertBytes32(draft.sellerPayout, 'sellerPayout'),
+    buyerPayout: draft.buyerPayout ?? ZERO32,
     orderRef: draft.orderRef.length === 0 ? ZERO32 : await sha256(draft.orderRef),
     itemsHash: await hashLineItems(draft.lineItems),
     memoHash: draft.memo.length === 0 ? ZERO32 : await sha256(draft.memo),

@@ -166,9 +166,18 @@ const assertTerms = (terms: InvoiceTerms | undefined, name: string): InvoiceTerm
     throw new WitnessError(`${name}: tax cannot exceed amount`);
   }
   assertBytes32(terms.currency, `${name}.currency`);
+  assertBytes32(terms.tokenType, `${name}.tokenType`);
+  assertBytes32(terms.sellerPayout, `${name}.sellerPayout`);
+  assertBytes32(terms.buyerPayout, `${name}.buyerPayout`);
   assertBytes32(terms.orderRef, `${name}.orderRef`);
   assertBytes32(terms.itemsHash, `${name}.itemsHash`);
   assertBytes32(terms.memoHash, `${name}.memoHash`);
+  // A payout of all zeroes is a key nobody controls, and the paying circuits
+  // compare against these. Catching it here means the mistake surfaces when the
+  // invoice is drafted rather than when someone tries to pay it.
+  if (isAllZero(terms.sellerPayout)) {
+    throw new WitnessError(`${name}.sellerPayout must be set`);
+  }
   if (isAllZero(terms.currency)) {
     throw new WitnessError(`${name}.currency must be set`);
   }

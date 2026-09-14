@@ -204,6 +204,19 @@ export struct InvoiceTerms {
   // The human label, e.g. "USDM". It names a denomination to a reader; it is
   // not a token and nothing can be paid to it.
   currency: Bytes<32>,
+  // Where each side is paid, as Zswap coin public keys.
+  //
+  // These live in the terms rather than on the public anchor for two reasons.
+  // They stay private, so an observer cannot link every invoice a seller issues
+  // by a repeated payout address; and they are already bound by the terms
+  // commitment the chain has held since issuance, so neither party can redirect
+  // a payment afterwards.
+  //
+  // Without them every paying circuit took its recipient as a free argument and
+  // asserted nothing about it, so a buyer could route their own settlement back
+  // to themselves and still mark the invoice paid.
+  sellerPayout: Bytes<32>,
+  buyerPayout: Bytes<32>,
   // The shielded token this invoice is payable in, as Zswap's own colour.
   //
   // Separate from `currency` because the two answer different questions, and
@@ -495,6 +508,11 @@ circuit assertTermsValid(frame: TermsFrame, issuedAt: Uint<64>): [] {
   // through a malformed envelope the auditor could not distinguish from a
   // legitimate one.
   assert(frame.terms.taxAmount <= frame.terms.amount, "quietbooks: tax cannot exceed amount");
+  // An invoice whose total cannot be expressed as a coin can never be settled,
+  // because a shielded coin's value is a Uint<128>. Refusing it at issuance
+  // beats stranding it.
+  assert(frame.terms.amount + frame.terms.taxAmount <= 340282366920938463463374607431768211455,
+         "quietbooks: invoice total is too large to be paid");
 }
 
 // ---------------------------------------------------------------------------
@@ -619,13 +637,35 @@ export circuit issueInvoice(
 // settlement path: it is what stops a party from settling an invoice whose terms
 // they cannot actually open, and it is the only reason the contract can be sure
 // the hidden amount it never sees is the one both sides agreed to.
-circuit assertHoldsTerms(invoiceId: Bytes<32>, anchor: InvoiceAnchor): [] {
+// Prove the caller holds terms that open this invoice's commitment.
+//
+// The terms are passed IN rather than read here, and that is the whole point.
+// `invoiceTerms()` is a witness: the prover supplies it, and every call is an
+// independent private input. A circuit that read it here and then read it again
+// to check an amount would be comparing two unrelated values -- the first proven
+// against the commitment, the second free. A malicious prover returns the real
+// terms to this circuit and anything they like to the next.
+//
+// Threading one read through every use is what makes "the terms are the ones the
+// chain committed to" true rather than merely intended.
+// Was this settled on or before the due date, according to the chain?
+//
+// Every settlement path used to decide this from a `settledAt` the caller passed
+// in. In `settleAttested` the caller is the seller, so a seller marked their own
+// punctuality; in the others the payer marked the seller's. Either way the
+// counter it feeds -- the record the product asks a counterparty to trust -- was
+// self-certified. The block time is the one clock nobody at the keyboard owns.
+circuit onTimeNow(dueDate: Uint<64>): Boolean {
+  return !blockTimeGt(dueDate);
+}
+
+circuit assertHoldsTerms(invoiceId: Bytes<32>, anchor: InvoiceAnchor, terms: InvoiceTerms): [] {
   const frame = TermsFrame {
     invoiceId: invoiceId,
     sellerKey: anchor.sellerKey,
     buyerKey: anchor.buyerKey,
     dueDate: anchor.dueDate,
-    terms: invoiceTerms()
+    terms: terms
   };
   assert(commitTerms(frame, termsSalt()) == anchor.terms,
          "quietbooks: terms do not open the recorded commitment");
@@ -667,20 +707,21 @@ export circuit settleWithNote(
   const buyerKey = callerKey(buyerPin);
   assert(disclose(buyerKey) == anchor.buyerKey, "quietbooks: caller is not the buyer");
 
-  assertHoldsTerms(id, anchor);
-
-  // The payment has to be the invoiced total, and the contract checks that
-  // without either figure reaching public state. The terms are the ones just
-  // proven to open the commitment the chain has held since issuance, and the
-  // comparison happens inside the circuit against the coin the buyer is
-  // spending. A buyer cannot mark an invoice settled by underpaying it.
+  // Read once, then used for everything: the commitment check and the payment
+  // checks have to be about the same terms. See `assertHoldsTerms`.
   const terms = invoiceTerms();
+  assertHoldsTerms(id, anchor, terms);
+
+  // The payment has to be the invoiced total, in the invoiced token, to the
+  // address the invoice names. All three come from terms that have just been
+  // proven to open the chain's commitment, and none of the three figures reaches
+  // public state.
   assert(coin.value == terms.amount + terms.taxAmount,
          "quietbooks: payment does not equal the invoice total");
-  // The right number of the wrong token is not payment. Without this a buyer
-  // could settle a real invoice with any coin whose value happened to match.
   assert(coin.color == terms.tokenType,
          "quietbooks: payment is not in the token this invoice is payable in");
+  assert(disclose(sellerPayout).bytes == terms.sellerPayout,
+         "quietbooks: payment is not addressed to the seller on this invoice");
 
   receiveShielded(disclose(coin));
   sendImmediateShielded(
@@ -690,7 +731,7 @@ export circuit settleWithNote(
   );
 
   const n = disclose(commitPaidCoin(coin));
-  const onTime = at <= anchor.dueDate;
+  const onTime = onTimeNow(anchor.dueDate);
 
   settlements.insert(id, Settlement {
     mode: SettlementMode.privateNote,
@@ -729,9 +770,9 @@ export circuit settleAttested(
   const sellerKey = callerKey(sellerPin);
   assert(disclose(sellerKey) == anchor.sellerKey, "quietbooks: caller is not the seller");
 
-  assertHoldsTerms(id, anchor);
+  assertHoldsTerms(id, anchor, invoiceTerms());
 
-  const onTime = at <= anchor.dueDate;
+  const onTime = onTimeNow(anchor.dueDate);
 
   settlements.insert(id, Settlement {
     mode: SettlementMode.attested,
@@ -827,16 +868,21 @@ export circuit fundEscrow(
   const buyerKey = callerKey(buyerPin);
   assert(disclose(buyerKey) == anchor.buyerKey, "quietbooks: caller is not the buyer");
 
-  assertHoldsTerms(id, anchor);
+  const terms = invoiceTerms();
+  assertHoldsTerms(id, anchor, terms);
 
-  assert(disclose(deadline) > disclose(fundedAt), "quietbooks: escrow deadline must be in the future");
-  assert(disclose(coin).value > 0, "quietbooks: escrowed amount must be positive");
+  // Against the chain's clock, not against another argument. Comparing the
+  // deadline to a `fundedAt` the same caller supplies says nothing at all: both
+  // were chosen together, so the assertion held for a deadline already in the
+  // past, and the buyer could refund themselves in the next block.
+  assert(blockTimeLt(disclose(deadline)), "quietbooks: escrow deadline must be in the future");
 
-  // Escrow locks a coin that is later released as settlement of this invoice,
-  // so it has to be the token this invoice is payable in. The caller has just
-  // proven they hold the terms, so the comparison is against something the
-  // chain has been committed to since issuance.
-  assert(coin.color == invoiceTerms().tokenType,
+  // The full invoiced total, in the invoiced token. Releasing an escrow marks
+  // the invoice settled and credits the seller, so an escrow worth less than the
+  // invoice is a settlement for less than the invoice.
+  assert(coin.value == terms.amount + terms.taxAmount,
+         "quietbooks: escrow must equal the invoice total");
+  assert(coin.color == terms.tokenType,
          "quietbooks: escrow is not in the token this invoice is payable in");
 
   // The coin must appear as an output addressed to this contract in this
@@ -868,10 +914,18 @@ export circuit releaseEscrow(
   assert(escrowVault.member(id), "quietbooks: escrow vault entry missing");
   const held = escrowVault.lookup(id);
 
+  // To the seller this invoice names, not to whoever asked. Without this the
+  // buyer -- who is the only caller here -- could release the escrow to
+  // themselves and still have the invoice recorded as settled.
+  const terms = invoiceTerms();
+  assertHoldsTerms(id, anchor, terms);
+  assert(disclose(sellerPayout).bytes == terms.sellerPayout,
+         "quietbooks: release is not addressed to the seller on this invoice");
+
   sendShielded(held, left<ZswapCoinPublicKey, ContractAddress>(disclose(sellerPayout)), held.value);
   escrowVault.remove(id);
 
-  const onTime = at <= anchor.dueDate;
+  const onTime = onTimeNow(anchor.dueDate);
   settlements.insert(id, Settlement {
     mode: SettlementMode.escrow,
     note: commitEscrowCoin(held),
@@ -888,12 +942,18 @@ export circuit releaseEscrow(
 // After the deadline, the buyer takes their money back. Only the buyer may call
 // this, and only once the deadline has genuinely passed on chain .. the time is
 // read from the block, not from an argument, so it cannot be forged.
+// Deliberately callable while paused, like `revokeAudit`.
+//
+// Every other state-advancing circuit stops on a pause. This one must not: the
+// deadline has already passed, the money is the buyer's, and an administrator
+// who pauses -- or who loses their key while paused -- would otherwise trap it
+// with no way out. A pause is an emergency stop on new business, not a freeze on
+// funds somebody is already owed back.
 export circuit refundEscrow(
   invoiceId: Bytes<32>,
   buyerPin: Uint<64>,
   buyerPayout: ZswapCoinPublicKey
 ): [] {
-  assertNotPaused();
   const id = disclose(invoiceId);
 
   assert(invoices.member(id), "quietbooks: unknown invoice");
@@ -964,10 +1024,18 @@ export circuit resolveDispute(
   assert(escrowVault.member(id), "quietbooks: escrow vault entry missing");
   const held = escrowVault.lookup(id);
 
+  const decided = disclose(forSeller);
+
+  // The verdict picks the address; the arbiter does not. `forSeller` and
+  // `payout` used to be unrelated arguments, so an arbiter could rule for one
+  // party and send the money to a third -- themselves, for instance.
+  const terms = invoiceTerms();
+  assertHoldsTerms(id, anchor, terms);
+  assert(disclose(payout).bytes == (decided ? terms.sellerPayout : terms.buyerPayout),
+         "quietbooks: payout does not match the party the ruling favours");
+
   sendShielded(held, left<ZswapCoinPublicKey, ContractAddress>(disclose(payout)), held.value);
   escrowVault.remove(id);
-
-  const decided = disclose(forSeller);
   disputes.insert(id, decided ? DisputeOutcome.forSeller : DisputeOutcome.forBuyer);
 
   // The losing side carries the mark. A seller who loses failed to deliver; a
@@ -992,7 +1060,7 @@ export circuit resolveDispute(
       note: commitEscrowCoin(held),
       receipt: default<Bytes<32>>,
       settledAt: at,
-      onTime: at <= anchor.dueDate
+      onTime: onTimeNow(anchor.dueDate)
     });
     bumpSettled(anchor.sellerKey, at <= anchor.dueDate);
     settledCount.increment(1);
@@ -1031,7 +1099,9 @@ export circuit grantAudit(
 
   assert(disclose(auditKeyHash) != default<Bytes<32>>, "quietbooks: audit key hash must be set");
   assert(anyScope(disclose(scopes)), "quietbooks: grant must disclose at least one field");
-  assert(disclose(expiresAt) > disclose(grantedAt), "quietbooks: grant must expire in the future");
+  // Against the chain's clock. Comparing two arguments the same caller chose
+  // was vacuous, and `audit.ts` told readers the contract enforced this.
+  assert(blockTimeLt(disclose(expiresAt)), "quietbooks: grant must expire in the future");
 
   auditGrants.insert(id, AuditGrant {
     auditKeyHash: disclose(auditKeyHash),
