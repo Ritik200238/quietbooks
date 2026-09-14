@@ -68,6 +68,7 @@ import {
 export * from './common-types.js';
 export * from './store-password.js';
 export * from './network.js';
+export * from './coin-key.js';
 
 /** Options every write shares. */
 export type CallOptions = {
@@ -577,6 +578,21 @@ export class QuietBooksAPI {
     }
   }
 
+  /**
+   * The named arbiter rules, and the escrow moves in the same call.
+   *
+   * Staged, like the settlement paths, and for the same reason. The circuit
+   * binds the payment to the address the invoice names for the winning side,
+   * and proving that binding means opening the terms commitment -- so
+   * `resolveDispute` reads `invoiceTerms()` and `termsSalt()`, and both throw
+   * unless the openings are staged first. It was the one paying circuit here
+   * that went straight to `callTx`, which made every ruling fail on a message
+   * about private state rather than anything an arbiter could act on.
+   *
+   * It follows that the arbiter has to hold the invoice record, which means the
+   * arbiter sees the amount. That is the documented price of binding the ruling
+   * to an address; the contract header says so too.
+   */
   async resolveDispute(
     invoiceId: string,
     forSeller: boolean,
@@ -584,17 +600,19 @@ export class QuietBooksAPI {
     options: CallOptions = {},
   ): Promise<void> {
     const pin = options.pin ?? DEFAULT_PIN;
-    try {
-      await this.deployedContract.callTx.resolveDispute(
-        fromHex(invoiceId),
-        pin,
-        forSeller,
-        { bytes: payout },
-        nowSeconds(),
-      );
-    } catch (error) {
-      failed('resolveDispute', error);
-    }
+    await this.withStaged(invoiceId, async () => {
+      try {
+        await this.deployedContract.callTx.resolveDispute(
+          fromHex(invoiceId),
+          pin,
+          forSeller,
+          { bytes: payout },
+          nowSeconds(),
+        );
+      } catch (error) {
+        failed('resolveDispute', error);
+      }
+    });
   }
 
   // -------------------------------------------------------------------------

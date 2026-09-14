@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import { encodeCoinPublicKey } from '@midnight-ntwrk/compact-runtime';
+import { coinPublicKeyBytes } from '@quietbooks/api';
 
 import { randomBytes32, sha256, toHex } from '@quietbooks/contract';
 
@@ -57,7 +57,7 @@ export const settleWithNote = async (context: AppContext): Promise<void> => {
   // and the seller's wallet finds the payment by decrypting it. Pay without it
   // and the coin lands where the contract said, belonging to the seller, and no
   // wallet in the world can see it.
-  const ours = encodeCoinPublicKey(context.wallet.getCoinPublicKey());
+  const ours = coinPublicKeyBytes(context.wallet.getCoinPublicKey());
   const payingOurselves = toHex(sellerPayout) === toHex(ours);
   if (view.stored.sellerEncryptionKey === undefined && !payingOurselves) {
     out('');

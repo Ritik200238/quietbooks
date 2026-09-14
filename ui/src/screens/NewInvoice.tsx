@@ -11,8 +11,8 @@
 
 import { useCallback, useMemo, useState, type FormEvent } from 'react';
 
-import { encodeCoinPublicKey } from '@midnight-ntwrk/compact-runtime';
 import type { InvoiceDraft, LineItem } from '@quietbooks/contract';
+import { coinPublicKeyBytes as parseCoinPublicKey } from '@quietbooks/api';
 import { daysFromNow, fromHex, lineItemsTotal, toHex } from '@quietbooks/contract';
 
 import { CopyButton, Digest } from '../components/Copyable';
@@ -154,23 +154,22 @@ export const NewInvoice = (): JSX.Element => {
   // invoice is submitted. The submit button says that part.
   const buyerKeyProblem = buyerKey.trim().length === 0 ? undefined : blockedBy(buyerKeyChecks);
 
-  // A wallet hands out its coin public key in Bech32m, and the circuit wants the
-  // 32 bytes inside it. `encodeCoinPublicKey` is the only thing that reads it
-  // correctly .. taking the string for hex gives the wrong bytes, and gives them
-  // without complaining. It runs on every keystroke, including the half-typed
-  // states, so what it rejects has to arrive as a sentence beside the field
-  // rather than as an exception on submit.
+  // A coin public key has two spellings and a buyer will paste whichever their
+  // wallet gave them: Bech32m from a browser wallet, 64 hex characters from a
+  // locally built one. `parseCoinPublicKey` reads both and checks the length;
+  // the earlier code here called `encodeCoinPublicKey`, which reads only hex and
+  // therefore rejected every browser wallet's key outright.
+  //
+  // It runs on every keystroke, including the half-typed states, so what it
+  // rejects has to arrive as a sentence beside the field rather than as an
+  // exception on submit.
   const parsedBuyerPayout = useMemo<{ value: Uint8Array } | { error: string } | undefined>(() => {
     const typed = buyerPayout.trim();
     if (typed.length === 0) {
       return undefined;
     }
     try {
-      const bytes = encodeCoinPublicKey(typed);
-      // Anything that decodes to another length is not a coin public key .. a
-      // shielded address is the likely mistake, since the two look alike. The
-      // terms would carry it happily and only a dispute would find out.
-      return bytes.length === 32 ? { value: bytes } : { error: NOT_A_COIN_KEY };
+      return { value: parseCoinPublicKey(typed) };
     } catch {
       return { error: NOT_A_COIN_KEY };
     }
