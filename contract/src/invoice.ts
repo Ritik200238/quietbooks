@@ -345,6 +345,7 @@ export const storedInvoiceFrom = (args: {
   issuedAt: bigint;
   pin: bigint;
   role: StoredInvoice['role'];
+  sellerEncryptionKey?: string;
 }): StoredInvoice => ({
   invoiceId: toHex(args.invoiceId),
   terms: args.prepared.terms,
@@ -357,4 +358,7 @@ export const storedInvoiceFrom = (args: {
   issuedAt: args.issuedAt,
   pin: args.pin,
   role: args.role,
+  ...(args.sellerEncryptionKey === undefined
+    ? {}
+    : { sellerEncryptionKey: args.sellerEncryptionKey }),
 });

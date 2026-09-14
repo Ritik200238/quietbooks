@@ -72,6 +72,14 @@ const SEALED_REASON =
 // ---------------------------------------------------------------------------
 
 const SettleWithNote = ({ api, view, paused, onDone }: ActionProps): JSX.Element => {
+  const { coinPublicKeyBytes } = useConnected();
+  // Paying ourselves is the one case that needs no key from anyone: midnight-js
+  // already knows the connected wallet's. It happens in a single-wallet demo and
+  // whenever the same person holds both sides.
+  const payingOurselves =
+    view.stored !== undefined &&
+    toHex(view.stored.terms.sellerPayout) === toHex(coinPublicKeyBytes);
+
   const action = useAction(async () => {
     // The nonce identifies this one coin. Fresh every time: reusing one names a
     // coin the ledger already knows about.
@@ -83,7 +91,16 @@ const SettleWithNote = ({ api, view, paused, onDone }: ActionProps): JSX.Element
       color: view.stored!.terms.tokenType,
       value: view.payable!,
     };
-    await api.settleWithNote(view.invoiceId, coin, view.stored!.terms.sellerPayout);
+    // The seller's encryption key travels with the record they exported. It is
+    // what lets their wallet find the output this transaction creates: a
+    // shielded output carries a ciphertext built for one encryption key, and a
+    // payment the recipient cannot decrypt is a payment nobody can spend.
+    await api.settleWithNote(
+      view.invoiceId,
+      coin,
+      view.stored!.terms.sellerPayout,
+      view.stored!.sellerEncryptionKey,
+    );
     await onDone();
   }, PROVING_NOTE);
 
@@ -91,6 +108,13 @@ const SettleWithNote = ({ api, view, paused, onDone }: ActionProps): JSX.Element
     [view.stored === undefined, SEALED_REASON],
     [paused, PAUSED_REASON],
     [view.payable === undefined, 'This wallet cannot open the invoice, so it cannot know what to pay.'],
+    [
+      view.stored !== undefined &&
+        view.stored.sellerEncryptionKey === undefined &&
+        !payingOurselves,
+      'The record the seller shared does not carry their encryption key, so their wallet ' +
+        'could not find the payment. Ask them to export the invoice again.',
+    ],
   ]);
 
   return (

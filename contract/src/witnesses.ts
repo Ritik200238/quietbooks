@@ -79,6 +79,22 @@ export type StoredInvoice = {
   readonly pin: bigint;
   /** 'seller' when we issued it, 'buyer' when it was addressed to us. */
   readonly role: 'seller' | 'buyer' | 'arbiter';
+  /**
+   * The seller's Zswap *encryption* public key, when the record came from them.
+   *
+   * Not part of any commitment and not a secret: it is transport. A shielded
+   * output carries a ciphertext only the recipient's encryption key can open,
+   * and without it the payment the buyer makes is invisible to the seller --
+   * paid, on chain, and undiscoverable by the only person who wanted it. The
+   * paying wallet needs the key at settlement time, so it travels with the
+   * openings rather than in a second message nobody would think to send.
+   *
+   * Optional because a record this wallet wrote for itself has no counterparty
+   * to name, and because records exported before this field existed are still
+   * readable; `settleWithNote` is the only caller and it says clearly what is
+   * missing.
+   */
+  readonly sellerEncryptionKey?: string;
 };
 
 /**
