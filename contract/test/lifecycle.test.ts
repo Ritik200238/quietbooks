@@ -18,6 +18,7 @@ import {
   expectThrows,
   issue,
   led,
+  OTHER_TOKEN,
   pk,
   SELLER_PIN,
   SELLER_SECRET,
@@ -28,7 +29,7 @@ import {
 } from './harness.js';
 
 import { InvoiceStatus, pureCircuits, SettlementMode } from '../build/contract/index.js';
-import { payableTotal, prepareInvoice } from '../src/invoice.js';
+import { NATIVE_SHIELDED_TOKEN, payableTotal, prepareInvoice } from '../src/invoice.js';
 import { randomBytes32, toHex } from '../src/util.js';
 
 /** Where the buyer sends the payment. The contract only forwards to it. */
@@ -47,7 +48,7 @@ describe('issuing an invoice', () => {
     expect(toHex(anchor.buyerKey)).toBe(toHex(buyer.key));
     expect(anchor.dueDate).toBe(draft().dueDate);
     expect(anchor.settledAt).toBe(0n);
-    expect(anchor.rulesVersion).toBe(1n);
+    expect(anchor.rulesVersion).toBe(2n);
 
     // The anchor is fixed width and carries only digests and timestamps. The
     // amount exists nowhere in it, which is the property the whole design is
@@ -192,7 +193,7 @@ describe('settling with a bound shielded transfer', () => {
     // product, not a test artefact.
     const buyerState = stageFor(share(buyer.state, issued.stored), issued.prepared);
     const at = options.at ?? T0 + DAY;
-    const payment = coin(payableTotal(issued.prepared.terms));
+    const payment = coin(payableTotal(issued.prepared.terms), issued.prepared.terms.tokenType);
 
     const result = issued.d.contract.impureCircuits.settleWithNote(
       ctx(issued.d, buyerState, at),
@@ -256,12 +257,24 @@ describe('settling with a bound shielded transfer', () => {
     );
   });
 
-  /** An attempt to pay `delta` away from what the invoice asks for. */
-  const settleOffBy = async (delta: bigint) => {
+  /**
+   * Set up a settlement attempt and hand back the call, unmade.
+   *
+   * The token the invoice names, the token actually paid and the amount paid
+   * vary independently, which is the only way a test can say which of the two
+   * payment rules refused a coin.
+   */
+  const settleWith = async (attempt: {
+    delta?: bigint;
+    invoiceToken?: Uint8Array;
+    paidToken?: Uint8Array;
+  }) => {
     const d0 = deploy();
     const seller = actor(d0, SELLER_SECRET, SELLER_PIN);
     const buyer = actor(d0, BUYER_SECRET, BUYER_PIN);
-    const issued = await issue(d0, seller, buyer);
+    const issued = await issue(d0, seller, buyer, {
+      draft: { tokenType: attempt.invoiceToken },
+    });
     const buyerState = stageFor(share(buyer.state, issued.stored), issued.prepared);
 
     return () =>
@@ -269,11 +282,17 @@ describe('settling with a bound shielded transfer', () => {
         ctx(issued.d, buyerState, T0 + DAY),
         issued.invoiceId,
         buyer.pin,
-        coin(payableTotal(issued.prepared.terms) + delta),
+        coin(
+          payableTotal(issued.prepared.terms) + (attempt.delta ?? 0n),
+          attempt.paidToken ?? issued.prepared.terms.tokenType,
+        ),
         SELLER_PAYOUT,
         T0 + DAY,
       );
   };
+
+  /** An attempt to pay `delta` away from what the invoice asks for. */
+  const settleOffBy = (delta: bigint) => settleWith({ delta });
 
   // Neither the invoiced total nor the coin's value reaches public state, so the
   // only place this can be enforced is inside the circuit, against the terms the
@@ -284,6 +303,42 @@ describe('settling with a bound shielded transfer', () => {
 
   it('refuses a payment over the invoiced total', async () => {
     expectThrows(await settleOffBy(1n), 'payment does not equal the invoice total');
+  });
+
+  // The token is bound exactly as the total is: it comes out of the terms the
+  // buyer has just proven open the commitment recorded at issuance, so neither
+  // side can change it afterwards. Without the rule, an invoice for five figures
+  // of real money is settled by the same number of units of anything at all.
+  it('refuses the invoiced total paid in a token the invoice does not name', async () => {
+    expectThrows(
+      await settleWith({ paidToken: OTHER_TOKEN }),
+      'payment is not in the token this invoice is payable in',
+    );
+  });
+
+  it('settles an invoice payable in a token other than the native one', async () => {
+    const { d, invoiceId, payment } = await settle({ draft: { tokenType: OTHER_TOKEN } });
+
+    expect(toHex(payment.color)).toBe(toHex(OTHER_TOKEN));
+    expect(led(d).invoices.lookup(invoiceId).status).toBe(InvoiceStatus.settled);
+    expect(toHex(led(d).settlements.lookup(invoiceId).note)).toBe(
+      toHex(pureCircuits.commitPaidCoin(payment)),
+    );
+  });
+
+  it('checks the value and the token separately, on one invoice', async () => {
+    // An invoice denominated in something other than the native token is what
+    // tells the two rules apart: the token check has to follow what this invoice
+    // names rather than a fixed colour, and a buyer who gets one of the two
+    // wrong has to be told which one.
+    expectThrows(
+      await settleWith({ invoiceToken: OTHER_TOKEN, delta: 1n }),
+      'payment does not equal the invoice total',
+    );
+    expectThrows(
+      await settleWith({ invoiceToken: OTHER_TOKEN, paidToken: NATIVE_SHIELDED_TOKEN }),
+      'payment is not in the token this invoice is payable in',
+    );
   });
 
   it('records a digest of the coin that was actually paid', async () => {
