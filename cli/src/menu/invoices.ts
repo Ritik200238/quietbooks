@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import { encodeCoinPublicKey } from '@midnight-ntwrk/compact-runtime';
+import { coinPublicKeyBytes } from '@quietbooks/api';
 
 import {
   DisputeOutcome,
@@ -160,7 +160,7 @@ export const issueInvoice = async (context: AppContext): Promise<void> => {
   // and nothing can be paid to it. The seller's is this wallet's own; the
   // buyer's has to come from them, and is only needed if an arbiter might rule
   // in their favour.
-  const sellerPayout = encodeCoinPublicKey(context.wallet.getCoinPublicKey());
+  const sellerPayout = coinPublicKeyBytes(context.wallet.getCoinPublicKey());
   out('');
   out(`  Paying you at ${toHex(sellerPayout)}.`);
   const buyerPayoutTyped = await context.ask.line(
@@ -172,7 +172,7 @@ export const issueInvoice = async (context: AppContext): Promise<void> => {
   let buyerPayout: Uint8Array | undefined;
   if (buyerPayoutTyped !== undefined && buyerPayoutTyped.trim().length > 0) {
     try {
-      buyerPayout = encodeCoinPublicKey(buyerPayoutTyped.trim());
+      buyerPayout = coinPublicKeyBytes(buyerPayoutTyped.trim());
     } catch {
       out('  That is not a coin public key. Nothing was issued.');
       return;

@@ -154,6 +154,28 @@ const describe = (error: unknown, depth = 0): string => {
   if (cause !== undefined && cause !== null && cause !== error) {
     parts.push(`  caused by: ${describe(cause, depth + 1)}`);
   }
+
+  // The squashed cause keeps the message and loses the path. A defect thrown
+  // inside a fiber reaches us with a two-frame stack naming a file in
+  // `node_modules` and nothing of ours, which is enough to know something broke
+  // and not enough to know where. `Cause.pretty` renders the fiber's own trace,
+  // which is the part that names our call site.
+  if (depth === 0 && fiberCause !== undefined) {
+    try {
+      const rendered = Cause.pretty(fiberCause as Cause.Cause<unknown>, { renderErrorCause: true });
+      if (rendered.trim().length > 0) {
+        parts.push(
+          rendered
+            .split('\n')
+            .slice(0, 24)
+            .map((line) => `    ${line}`)
+            .join('\n'),
+        );
+      }
+    } catch {
+      // Rendering a cause must never be the reason a failure goes unreported.
+    }
+  }
   return parts.join('\n');
 };
 

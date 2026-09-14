@@ -12,7 +12,6 @@
 //    for every call, so anyone who is not running their own should at least be
 //    able to see which one they are using.
 
-import { encodeCoinPublicKey } from '@midnight-ntwrk/compact-runtime';
 import type { ConnectedAPI } from '@midnight-ntwrk/dapp-connector-api';
 import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
@@ -27,6 +26,7 @@ import {
 } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { fromHex, toHex } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
 import type { UnboundTransaction } from '@midnight-ntwrk/midnight-js-types';
+import { coinPublicKeyBytes } from '@quietbooks/api';
 import type {
   QuietBooksCircuitKeys,
   QuietBooksProviders,
@@ -147,6 +147,11 @@ export const buildProviders = async (connected: ConnectedAPI): Promise<BuiltProv
     providers,
     endpoints,
     shieldedCoinPublicKey: shieldedAddresses.shieldedCoinPublicKey,
-    shieldedCoinPublicKeyBytes: encodeCoinPublicKey(shieldedAddresses.shieldedCoinPublicKey),
+    // Through the API's parser, not `encodeCoinPublicKey`. A browser wallet
+    // hands out coin public keys in Bech32m and `encodeCoinPublicKey` reads only
+    // hex, so this line threw `Invalid character 'm' at position 0` and took the
+    // whole connect flow down with it -- before any contract call, on every real
+    // wallet.
+    shieldedCoinPublicKeyBytes: coinPublicKeyBytes(shieldedAddresses.shieldedCoinPublicKey),
   };
 };
