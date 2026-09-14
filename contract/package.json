@@ -25,7 +25,8 @@
     "build": "tsc -p tsconfig.build.json && node scripts/copy-artifacts.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:mutation": "node scripts/mutation.mjs"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-runtime": "0.16.0",
