@@ -385,6 +385,48 @@ a proof.
 
 ---
 
+## Paying in the wrong token
+
+Worth its own section, because the first version of this contract got it wrong in
+a way that a reader should be able to check rather than take on trust.
+
+Every settlement path compares the coin a buyer hands over against the invoice.
+Until recently that comparison was only of the **value**. The token type —
+Zswap's coin colour — was hashed into the settlement digest and never checked
+against anything.
+
+So an invoice for USD 1,250.00 could be settled with 1,250,000,000 units of any
+token at all, including one the buyer minted themselves and that nobody else
+would take. The contract would mark the invoice settled, write a settlement
+record, and credit the seller's reliability counters. The seller would have been
+paid in confetti and the chain would say otherwise.
+
+The invoice terms now carry the token the invoice is payable in:
+
+```compact
+tokenType: Bytes<32>,
+```
+
+It sits inside the terms commitment, so it is fixed at issuance and cannot be
+changed afterwards by either party, and it stays private — which token an invoice
+is denominated in is nobody else's business. `settleWithNote` and `fundEscrow`
+both compare the incoming coin against it, and the caller has already proven they
+hold terms that open the commitment the chain has held since issuance, so there
+is nothing to forge.
+
+Two things follow, and the second is the honest half:
+
+- **The value check and the token check are independent.** The right number of
+  the wrong token is refused, and so is the wrong number of the right one. Both
+  are tested, in both the settlement and the escrow paths.
+- **Neither interface lets a seller choose that token yet.** They issue in the
+  native shielded token, which is what the local network has. The binding follows
+  whatever the invoice says rather than a constant, and a test issues an invoice
+  in a non-native token and settles it, so the mechanism is not native-only — the
+  interface is.
+
+---
+
 ## Testing
 
 | Suite | What it proves |
@@ -408,14 +450,12 @@ Reintroducing the bug fails seven tests.
 
 Stated plainly, because a roadmap that only lists wins is not a roadmap.
 
-- **The currency on an invoice is a label, not a token.** The contract checks
-  that the coin's *value* equals the invoiced total and never relates
-  `terms.currency` to the coin's token type, and both interfaces settle in the
-  native shielded token. So an invoice reading "USD 1,250.00" settles as
-  1,250,000,000 units of NIGHT. Nothing is lost or misdirected, and the audit
-  envelope still opens correctly, but the denomination is the parties' shared
-  assumption rather than something the chain enforces. Binding the currency to a
-  token type is a contract change, not an interface one.
+- **Nothing issues in a token other than the native shielded one.** The contract
+  now binds each invoice to the token it is payable in and refuses a payment in
+  any other, but neither interface offers a way to pick that token at issue time,
+  so every invoice they create is denominated in the native token. The
+  enforcement is real and tested; the choice is not yet offered. See **[Paying in
+  the wrong token](#paying-in-the-wrong-token)**.
 - **Paying a seller you have never paid before needs one thing out of band.**
   Building a shielded output means encrypting the coin to its recipient, so the
   payer needs the seller's Zswap *encryption* key as well as the coin public key
