@@ -517,7 +517,6 @@ export class QuietBooksAPI {
           pin,
           coin,
           deadline,
-          nowSeconds(),
         );
       } catch (error) {
         failed('fundEscrow', error);
