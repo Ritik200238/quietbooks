@@ -40,28 +40,30 @@ export const settleWithNote = async (context: AppContext): Promise<void> => {
   // The circuit compares the coin against the terms the caller proves they hold
   // and refuses anything but the exact total, so there is nothing to ask here.
   out(`  Amount to pay: ${groupDigits(view.payable)} (the invoice total, checked by the circuit).`);
-  out('');
-  out('  Where should the payment go? This is the seller\'s Zswap coin public key,');
-  out('  which is not the party key on the invoice .. a party key is a hash and');
-  out('  nothing can be paid to it. The seller sends you this out of band.');
-  out('');
 
-  // No "blank pays this wallet" default any more. It routed the full invoice
-  // total back to the buyer while still marking the invoice settled, and it was
-  // the only branch that did not need the seller's encryption key, so it was
-  // also the path of least resistance through this flow. The contract now
-  // refuses a payment addressed anywhere but the seller the invoice names, so
-  // the default could only produce a failed proof.
-  const typed = await context.ask.line(`  Seller's coin public key`);
-  let sellerPayout: Uint8Array;
-  try {
-    // Through the SDK's codec, not `fromHex`. A `CoinPublicKey` is a 35-byte
-    // hex string, and the circuit wants the 32 bytes inside it; decoding by
-    // hand produces the wrong length and fails inside the circuit.
-    sellerPayout = encodeCoinPublicKey(typed.trim());
-  } catch {
-    out('  That is not a coin public key. Ask the seller for the value their');
-    out('  own identity screen prints. Nothing was sent.');
+  // Nothing is asked here any more.
+  //
+  // This flow used to prompt for the seller's coin public key, with a blank
+  // meaning "pay this wallet" .. which sent the full total back to the buyer and
+  // still marked the invoice settled. Both the prompt and the default are gone:
+  // the payout address is inside the terms commitment, the circuit refuses a
+  // payment addressed anywhere else, so every answer but one produced a failed
+  // proof and the one right answer was already sitting in the record.
+  const sellerPayout = view.stored.terms.sellerPayout;
+  out(`  Paying the address on the invoice: ${toHex(sellerPayout)}`);
+
+  // The seller's encryption key rides along with the record they exported. A
+  // shielded output carries a ciphertext built for exactly one encryption key,
+  // and the seller's wallet finds the payment by decrypting it. Pay without it
+  // and the coin lands where the contract said, belonging to the seller, and no
+  // wallet in the world can see it.
+  const ours = encodeCoinPublicKey(context.wallet.getCoinPublicKey());
+  const payingOurselves = toHex(sellerPayout) === toHex(ours);
+  if (view.stored.sellerEncryptionKey === undefined && !payingOurselves) {
+    out('');
+    out('  The record the seller shared does not carry their encryption key, so');
+    out('  their wallet could not find this payment. Ask them to export the');
+    out('  invoice again. Nothing was sent.');
     return;
   }
 
@@ -75,7 +77,12 @@ export const settleWithNote = async (context: AppContext): Promise<void> => {
   out('');
   out('  Proving and submitting. This builds the payment and the contract call as');
   out('  one transaction, so either both happen or neither does.');
-  await context.api.settleWithNote(view.invoiceId, coin, sellerPayout);
+  await context.api.settleWithNote(
+    view.invoiceId,
+    coin,
+    sellerPayout,
+    view.stored.sellerEncryptionKey,
+  );
   out(`  Settled ${view.invoiceId}.`);
   out(`  Coin nonce (keep it; an auditor needs it to verify the amount): ${toHex(coin.nonce)}`);
 };

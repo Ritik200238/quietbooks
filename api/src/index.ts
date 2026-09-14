@@ -669,7 +669,24 @@ export class QuietBooksAPI {
     if (stored === undefined) {
       throw new QuietBooksError(`invoice ${invoiceId} is not in this wallet`, 'exportInvoice');
     }
-    return JSON.stringify(serialiseStored(stored), null, 2);
+    // A seller exporting their own invoice attaches the key the buyer will need
+    // to pay them.
+    //
+    // `sendImmediateShielded` puts an output on chain addressed to the seller's
+    // coin public key, and the wallet that finds it does so by trial-decrypting
+    // the ciphertext beside it. That ciphertext is built for one encryption key.
+    // Without it the buyer's own key gets used, the payment lands where the
+    // contract said and no wallet in the world can see it. The money is not
+    // lost, but nobody can spend it, which for the seller is the same thing.
+    //
+    // Forwarding a record we received from someone else keeps whatever key came
+    // with it: we are not the seller, and substituting ours would redirect the
+    // ciphertext to a party the invoice does not name.
+    const withKey: StoredInvoice =
+      stored.role === 'seller'
+        ? { ...stored, sellerEncryptionKey: this.providers.walletProvider.getEncryptionPublicKey() }
+        : stored;
+    return JSON.stringify(serialiseStored(withKey), null, 2);
   }
 
   /** Import a record shared by a counterparty, recording our role in it. */
@@ -797,6 +814,15 @@ type SerialisedInvoice = {
   dueDate: string;
   issuedAt: string;
   pin: string;
+  /**
+   * The exporting seller's Zswap encryption public key.
+   *
+   * Optional in the type because a record written before this field existed is
+   * still a valid record .. its commitments open exactly as they always did.
+   * Missing it costs the buyer the ability to pay the seller, not the ability to
+   * read the invoice, so it is not in `requireField` with the committed fields.
+   */
+  sellerEncryptionKey?: string;
 };
 
 const serialiseStored = (stored: StoredInvoice): SerialisedInvoice => ({
@@ -820,6 +846,9 @@ const serialiseStored = (stored: StoredInvoice): SerialisedInvoice => ({
   dueDate: stored.dueDate.toString(),
   issuedAt: stored.issuedAt.toString(),
   pin: stored.pin.toString(),
+  ...(stored.sellerEncryptionKey === undefined
+    ? {}
+    : { sellerEncryptionKey: stored.sellerEncryptionKey }),
 });
 
 /** Read a field a shared record cannot be understood without. */
@@ -870,6 +899,9 @@ const deserialiseStored = (value: unknown): StoredInvoice => {
     issuedAt: BigInt(raw.issuedAt),
     pin: BigInt(raw.pin),
     role: 'buyer',
+    ...(typeof raw.sellerEncryptionKey === 'string'
+      ? { sellerEncryptionKey: raw.sellerEncryptionKey }
+      : {}),
   };
 };
 
