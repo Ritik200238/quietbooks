@@ -253,6 +253,18 @@ npm test            # the contract test suite
 The test suite runs entirely in process against the compiled contract. No
 Docker, no node, no proof server, no network.
 
+To check the tests would actually fail if the contract were wrong:
+
+```bash
+npm run test:mutation --workspace @quietbooks/contract
+```
+
+That reverts each security fix in turn, recompiles, runs the tests meant to be
+guarding it, and reports whether they went red. It exits non-zero if any
+reverted fix survives, because a fix nothing is guarding is a finding rather
+than a detail. It needs the Compact toolchain — on Windows it shells the
+compile through WSL, same as `npm run compact`.
+
 ### The local network
 
 ```bash
