@@ -164,8 +164,10 @@ export const issueInvoice = async (context: AppContext): Promise<void> => {
   out('');
   out(`  Paying you at ${toHex(sellerPayout)}.`);
   const buyerPayoutTyped = await context.ask.line(
-    "  Buyer's coin public key (blank if this invoice has no arbiter)",
-    { allowEmpty: true },
+    arbiterKey === undefined
+      ? "  Buyer's coin public key (blank: no arbiter, so nothing can pay them)"
+      : "  Buyer's coin public key (required, this invoice has an arbiter)",
+    { allowEmpty: arbiterKey === undefined },
   );
   let buyerPayout: Uint8Array | undefined;
   if (buyerPayoutTyped !== undefined && buyerPayoutTyped.trim().length > 0) {
@@ -175,6 +177,23 @@ export const issueInvoice = async (context: AppContext): Promise<void> => {
       out('  That is not a coin public key. Nothing was issued.');
       return;
     }
+  }
+
+  // The contract refuses both of these at issuance, and both are easy to do
+  // without noticing. `resolveDispute` pays the address the terms name for
+  // whichever side wins, so an invoice with an arbiter and no buyer address
+  // burns the escrow on a ruling for the buyer, and one carrying this wallet's
+  // key for both sides pays the seller either way. The arbiter would be unable
+  // to rule against the party who named them.
+  if (arbiterKey !== undefined && buyerPayout === undefined) {
+    out('  An invoice with an arbiter needs the buyer’s payout key: without one');
+    out('  a ruling in their favour has nowhere to send the money. Nothing was issued.');
+    return;
+  }
+  if (buyerPayout !== undefined && toHex(buyerPayout) === toHex(sellerPayout)) {
+    out('  That is this wallet’s own payout key. The buyer’s has to be theirs, or');
+    out('  a ruling in their favour would pay you. Nothing was issued.');
+    return;
   }
 
   const draft: InvoiceDraft = {
