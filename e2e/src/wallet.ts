@@ -52,11 +52,24 @@ const DUST_OPTIONS: DustWalletOptions = {
   ledgerParams: LedgerParameters.initialParameters(),
   // This is the value midnight-local-dev uses against this same node image.
   //
-  // It is worth stating why it is not larger. The bboard CLI applies an overhead
-  // of 5e17 on the undeployed preset, but the genesis wallet on this preset holds
-  // 5e14 NIGHT. An overhead a thousand times the entire balance makes every
-  // transaction unfundable, and the wallet reports that as a bare
-  // "Transaction submission error" with no cause attached.
+  // This comment used to claim more than that, and the claim was wrong. It said
+  // the overhead must not be larger, because the bboard CLI's 5e17 is a thousand
+  // times the genesis wallet's 5e14 NIGHT and made every transaction unfundable
+  // with a bare "Transaction submission error". Measured since, both ways,
+  // against this node: a deploy through the same wallet path succeeds at 1000
+  // and succeeds at 5e17. The overhead was never the problem.
+  //
+  // What produces that error is a wallet whose DUST is not yet spendable --
+  // fees are paid in DUST, which registered NIGHT generates over a few blocks,
+  // so a deploy submitted before `registerForDust` has settled fails exactly
+  // that way. Lowering the overhead and fixing the sync happened together, and
+  // the wrong one got written down as the cause.
+  //
+  // Left at 1000 because it is what midnight-local-dev uses and it works; the
+  // reason to prefer it is no longer a claim about the other value being broken.
+  // Recorded at length because a wrong explanation is worse than none: reasoning
+  // from this one nearly produced a "fix" to the CLI, which sets 5e17 and is
+  // fine.
   additionalFeeOverhead: 1_000n,
   feeBlocksMargin: 5,
 };
