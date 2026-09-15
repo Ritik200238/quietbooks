@@ -16,7 +16,7 @@
     "compact": "npm run compact --workspace @quietbooks/contract",
     "build": "npm run build --workspace @quietbooks/contract && npm run build --workspace @quietbooks/api && npm run build --workspace @quietbooks/cli && npm run build --workspace @quietbooks/e2e",
     "build:ui": "npm run build --workspace @quietbooks/ui",
-    "test": "npm run test --workspace @quietbooks/contract",
+    "test": "npm run test --workspace @quietbooks/contract && npm run test --workspace @quietbooks/api",
     "e2e": "npm run e2e --workspace @quietbooks/e2e",
     "localnet:up": "docker compose -f localnet/standalone.yml up -d",
     "localnet:down": "docker compose -f localnet/standalone.yml down",
