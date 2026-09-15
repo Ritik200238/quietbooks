@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "e2e": "npm run build && node dist/run.js",
+    "e2e:two-party": "npm run build && node dist/two-party.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
