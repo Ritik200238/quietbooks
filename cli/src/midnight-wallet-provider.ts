@@ -106,6 +106,11 @@ export class MidnightWalletProvider implements MidnightProvider, WalletProvider 
       ledgerParams: LedgerParameters.initialParameters(),
       // The local node's fee model differs enough from the public networks that
       // one overhead figure cannot serve both; this is the example's split.
+      //
+      // Checked rather than inherited: a deploy through this wallet path was run
+      // against the local node at both 5e17 and 1000, and both succeed. The
+      // end-to-end harness uses 1000 because midnight-local-dev does, not
+      // because this value is broken.
       additionalFeeOverhead: env.walletNetworkId === 'undeployed' ? 500_000_000_000_000_000n : 1_000n,
       feeBlocksMargin: 5,
     };
