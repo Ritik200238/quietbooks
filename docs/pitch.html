@@ -491,8 +491,8 @@
     <div class="title-meta">
       <span><b>Contract</b> Compact 0.23</span>
       <span><b>Entry points</b> 12, compiling</span>
-      <span><b>Tests</b> 238 passing</span>
-      <span><b>End to end</b> 21/21 on a live node</span>
+      <span><b>Tests</b> 285 passing</span>
+      <span><b>End to end</b> 27/27, and 15/15 across two wallets</span>
       <span><b>Licence</b> Apache-2.0</span>
     </div>
   </section>
@@ -839,8 +839,8 @@ instance of the same contract in the same segment.</pre>
     </div>
     <div class="figures">
       <div class="figure"><span class="n">12</span><span class="l">entry points compiling, with proving and verifying keys</span></div>
-      <div class="figure"><span class="n">238</span><span class="l">tests passing against the compiled contract</span></div>
-      <div class="figure"><span class="n">21/21</span><span class="l">end-to-end steps on a live node with real proofs</span></div>
+      <div class="figure"><span class="n">285</span><span class="l">tests passing against the compiled contract and the API</span></div>
+      <div class="figure"><span class="n">27/27</span><span class="l">end-to-end steps on a live node with real proofs, plus 15/15 between two wallets</span></div>
       <div class="figure"><span class="n">18/18</span><span class="l">reverted fixes that a test catches, checked by recompiling each one</span></div>
     </div>
     <p>The end-to-end run deploys to a real Midnight node, then drives the whole business
@@ -892,7 +892,7 @@ instance of the same contract in the same segment.</pre>
     <p class="lead">A roadmap that lists only wins is not a roadmap.</p>
     <ul class="plain">
       <li><b>Nothing issues in a token other than the native shielded one.</b> The contract binds each invoice to the token it is payable in and refuses any other, but neither interface offers a way to pick that token at issue time. The enforcement is real and tested; the choice is not yet offered.</li>
-      <li><b>The end-to-end run uses one wallet for every role.</b> Seller, buyer and arbiter are three PINs of the same wallet. That is a real test of the authorisation rules and a poor test of payment: paying the wrong party is structurally invisible when every party is you. The circuit tests cover the binding and the mutation sweep confirms they bite; a genuine two-wallet run against the node is not built.</li>
+      <li><b>A wallet-connected run of the web interface.</b> Everything that does not need a browser wallet has been driven in a real browser, and the contract is covered end to end through a headless one. What is untested is Lace itself on TestNet, which no harness here can stand in for.</li>
       <li><b>The reliability threshold proof.</b> Written and tested, deferred to Wave 2 for the block-budget reason above. The counters it proves over are already being kept.</li>
       <li><b>Administrator rotation.</b> Removed for the same reason. The administrator is fixed at deploy; the emergency stop still works.</li>
       <li><b>Local proof server.</b> Every user needs one running. True of every Midnight DApp today; in-browser proving is the fix when it reaches the wallet.</li>
