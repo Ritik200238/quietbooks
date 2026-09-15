@@ -377,10 +377,20 @@ wallet's own endpoints, which is the right default for TestNet; `ui/.env.example
 documents every variable and [`ui/README.md`](./ui/README.md) covers the
 interface itself.
 
-Verified here: it builds, serves and renders its connect screen with no console
-errors. A wallet-connected run needs Lace on TestNet, which is not something the
-end-to-end harness can stand in for — the harness drives the contract through a
-headless wallet against the local network instead.
+Verified here, in a real browser: it builds, serves, renders, and survives the
+paths that do not need a wallet — creating and replacing the browser identity,
+form validation, the phone layout, and the connect attempt itself, which fails
+with "No Midnight Lace wallet found" rather than a stack trace. No console
+errors.
+
+Running it is also how the worst bug in this project was found. The connect
+path decoded the wallet's key with a hex reader while a browser wallet writes
+Bech32m, so connecting threw before any contract call, on every real wallet.
+Nothing caught it because nothing had ever opened the page.
+
+What is still not verified: a wallet-connected run. That needs Lace on TestNet,
+which the end-to-end harness cannot stand in for — it drives the contract
+through a headless wallet against the local network instead.
 
 ### The CLI
 
@@ -596,10 +606,16 @@ chain, and it buys a dispute process whose outcome cannot be redirected.
 | `audit.test.ts` | Grants, scope coverage, expiry, revocation, the reliability record, admin |
 | `audit-envelope.test.ts` | Envelope crypto and all eight validator checks |
 | `hostile-witness.test.ts` | What the contract does when the prover lies |
+| `api/test/coin-key.test.ts` | Both spellings of a coin public key give one answer |
+| `api/test/record.test.ts` | The record two parties exchange survives the trip |
 
-257 tests, all passing, no Docker required: they drive the compiled contract
-in-process through `@midnight-ntwrk/compact-runtime`, so a full run takes about
-eleven seconds.
+285 tests, all passing, no Docker required: 257 against the contract and 28
+against the API. The contract's drive the compiled contract in-process through
+`@midnight-ntwrk/compact-runtime`, so a full run takes about eleven seconds.
+
+The API had no tests at all until the connect path turned out to be broken for
+every real wallet. That layer is where the product meets the wallet, and it was
+the one layer nothing exercised.
 
 ### Tests that pass for the wrong reason
 
