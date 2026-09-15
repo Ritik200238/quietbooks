@@ -5,6 +5,7 @@
 import { useState } from 'react';
 
 import { CopyButton } from '../components/Copyable';
+import { ConfirmDialog } from '../components/Dialog';
 import { TextField } from '../components/Form';
 import { hasRootSecret, importRootSecret, rootSecretHex } from '../lib/identity';
 import { messageOf } from '../lib/format';
@@ -16,7 +17,27 @@ const IdentityBackup = (): JSX.Element => {
   const [incoming, setIncoming] = useState('');
   const [error, setError] = useState<string | undefined>(undefined);
   const [imported, setImported] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const existed = hasRootSecret();
+
+  /**
+   * Replace the secret this browser holds.
+   *
+   * Split out from the button because it is reached two ways: directly when
+   * there is nothing to lose, and through a confirmation when there is.
+   */
+  const replaceIdentity = (): void => {
+    try {
+      importRootSecret(incoming);
+      setIncoming('');
+      setError(undefined);
+      setImported(true);
+      setConfirming(false);
+    } catch (problem) {
+      setError(messageOf(problem));
+      setConfirming(false);
+    }
+  };
 
   return (
     <details className="stack">
@@ -79,14 +100,15 @@ const IdentityBackup = (): JSX.Element => {
             className="button button-small"
             disabled={incoming.trim().length === 0}
             onClick={() => {
-              try {
-                importRootSecret(incoming);
-                setIncoming('');
-                setError(undefined);
-                setImported(true);
-              } catch (problem) {
-                setError(messageOf(problem));
+              // Confirmed only when there is something to lose. On a browser
+              // that has never held a secret this is just setup, and a
+              // confirmation would be noise; on one that has, it is the most
+              // destructive thing in the product.
+              if (existed) {
+                setConfirming(true);
+                return;
               }
+              replaceIdentity();
             }}
           >
             Use this identity
@@ -94,6 +116,35 @@ const IdentityBackup = (): JSX.Element => {
           {imported && <span className="small muted">Identity replaced.</span>}
         </div>
       </div>
+
+      {confirming && (
+        <ConfirmDialog
+          title="Replace the identity this browser holds?"
+          confirmLabel="Replace my identity"
+          tone="danger"
+          acknowledgement="I have a copy of the current secret, or I accept losing what it opens."
+          onConfirm={replaceIdentity}
+          onCancel={() => setConfirming(false)}
+        >
+          <p>
+            The secret below is overwritten and there is no copy of it anywhere else &mdash; not
+            in your wallet, not on the chain, not on any server. Every invoice you can currently
+            open is opened by it. Afterwards those invoices are still on chain and still yours,
+            and nobody, including you, can read their terms or prove anything about them again.
+          </p>
+          <p className="contract-message" style={{ borderColor: 'var(--border-strong)' }}>
+            {rootSecretHex()}
+          </p>
+          <div className="row">
+            <CopyButton value={rootSecretHex()} label="the current identity secret" />
+          </div>
+          <p className="note">
+            Copy it first if you are not certain. Carrying an identity between browsers is what
+            this field is for, and in that case the secret you are pasting is the one you want to
+            keep &mdash; but the one it replaces is gone the moment you confirm.
+          </p>
+        </ConfirmDialog>
+      )}
     </details>
   );
 };
