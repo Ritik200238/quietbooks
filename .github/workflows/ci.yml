@@ -60,6 +60,12 @@ jobs:
       - name: Build the TypeScript packages
         run: npm run build
 
+      - name: Check no circuit reads a witness twice
+        # Structural form of the worst bug this contract has had. Runs before
+        # the suite because it needs no build and takes no time: if a circuit
+        # reads a witness twice, nothing downstream is worth waiting for.
+        run: npm run check:witness-reads --workspace @quietbooks/contract
+
       - name: Run the contract test suite
         run: npm test
 
