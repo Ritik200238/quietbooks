@@ -382,6 +382,94 @@
   @media (prefers-reduced-motion: no-preference) {
     .slide { transition: border-color 140ms ease; }
   }
+
+  /* ---------------------------------------------------------------------
+     Print, because a deck is a thing people hand over as a PDF.
+
+     Without these, printing flows the slides as one long column and splits
+     them wherever the page happens to end: a heading at the foot of one sheet
+     and its table on the next. One slide, one page, in landscape, which is the
+     shape a deck is read in.
+
+     The screen styling is already light-on-white, so there is no theme to
+     undo -- only the shadows and rounded edges, which cost ink and mean
+     nothing on paper.
+     --------------------------------------------------------------------- */
+  @page {
+    size: landscape;
+    margin: 12mm;
+  }
+
+  @media print {
+    body { background: #fff; }
+
+    /* A slide is taller than a landscape sheet at screen sizes, and when the
+       content does not fit `break-inside: avoid` is ignored rather than
+       honoured -- the printer has to put it somewhere. Fifteen slides came out
+       as twenty-eight pages, each split at whatever line the page ended on.
+       Scaling the type down is what makes the instruction satisfiable. */
+    :root {
+      --step-0: 0.78rem;
+      --step-1: 0.9rem;
+      --step-2: 1.08rem;
+      --step-3: 1.35rem;
+      --step-4: 1.75rem;
+      --measure: 100ch;
+    }
+
+    body { line-height: 1.45; }
+    .slide { gap: 10px; }
+    .cols { gap: 12px; }
+    .panel { padding: 10px 12px; }
+    .callout { padding: 10px 14px; }
+    .transcript { font-size: 0.62rem; line-height: 1.35; }
+    table { font-size: 0.68rem; }
+    td, th { padding: 4px 8px; }
+
+    .deck {
+      max-width: none;
+      gap: 0;
+      padding: 0;
+    }
+
+    .slide {
+      /* `break-*` is the current property; `page-break-*` is the one older
+         print engines read. Both, because whichever renders this is whatever
+         the reader happened to open it in. */
+      break-before: page;
+      page-break-before: always;
+      break-inside: avoid;
+      page-break-inside: avoid;
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+      padding: 0 0 8mm;
+      /* Vertically centred on its sheet, so a short slide does not sit in the
+         top corner of an otherwise empty page. */
+      min-height: 0;
+      justify-content: center;
+    }
+
+    .slide:first-of-type {
+      break-before: auto;
+      page-break-before: auto;
+    }
+
+    /* Panels and callouts keep their fill on paper: they are how the eye finds
+       the structure, and a browser that drops backgrounds leaves a wall of
+       undifferentiated text. */
+    .panel,
+    .callout,
+    .transcript,
+    table {
+      break-inside: avoid;
+      page-break-inside: avoid;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    a { text-decoration: none; }
+  }
 </style>
 
 </head>
