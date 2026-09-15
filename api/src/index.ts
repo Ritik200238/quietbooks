@@ -28,6 +28,9 @@ import type {
 } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
 import type { EncPublicKey } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { concatMap, map, type Observable } from 'rxjs';
+
+import { failed, QuietBooksError } from './errors.js';
+import { deserialiseStored, serialiseStored } from './record.js';
 import type { Logger } from 'pino';
 
 import {
@@ -69,6 +72,8 @@ export * from './common-types.js';
 export * from './store-password.js';
 export * from './network.js';
 export * from './coin-key.js';
+export * from './errors.js';
+export * from './record.js';
 
 /** Options every write shares. */
 export type CallOptions = {
@@ -78,32 +83,6 @@ export type CallOptions = {
 
 const DEFAULT_PIN = 1n;
 
-/**
- * Anything that can go wrong that the interface should show verbatim.
- *
- * Circuit assertion messages are written for humans .. "caller is not the
- * buyer", not "assert failed at 0x4c" .. so they are surfaced unchanged rather
- * than wrapped in a generic failure. `cause` keeps the original for logs.
- */
-export class QuietBooksError extends Error {
-  constructor(
-    message: string,
-    readonly operation: string,
-    override readonly cause?: unknown,
-  ) {
-    super(message);
-    this.name = 'QuietBooksError';
-  }
-}
-
-const failed = (operation: string, error: unknown): never => {
-  const message = error instanceof Error ? error.message : String(error);
-  // Circuit failures arrive with the assert text already in the message. Strip
-  // the contract's own prefix so the interface is not repeating "quietbooks:"
-  // in front of a sentence it is already labelling.
-  const cleaned = message.replace(/^quietbooks:\s*/i, '').trim();
-  throw new QuietBooksError(cleaned.length > 0 ? cleaned : `${operation} failed`, operation, error);
-};
 
 export class QuietBooksAPI {
   private constructor(
@@ -850,122 +829,6 @@ export const deriveState = (
     reliability: ledgerState.reliability.member(partyKey)
       ? ledgerState.reliability.lookup(partyKey)
       : NO_RELIABILITY,
-  };
-};
-
-// ---------------------------------------------------------------------------
-// Record serialisation
-// ---------------------------------------------------------------------------
-
-type SerialisedInvoice = {
-  invoiceId: string;
-  terms: {
-    amount: string;
-    taxAmount: string;
-    currency: string;
-    tokenType: string;
-    sellerPayout: string;
-    buyerPayout: string;
-    orderRef: string;
-    itemsHash: string;
-    memoHash: string;
-  };
-  termsSalt: string;
-  fieldSalts: string[];
-  nonce: string;
-  sellerKey: string;
-  buyerKey: string;
-  dueDate: string;
-  issuedAt: string;
-  pin: string;
-  /**
-   * The exporting seller's Zswap encryption public key.
-   *
-   * Optional in the type because a record written before this field existed is
-   * still a valid record .. its commitments open exactly as they always did.
-   * Missing it costs the buyer the ability to pay the seller, not the ability to
-   * read the invoice, so it is not in `requireField` with the committed fields.
-   */
-  sellerEncryptionKey?: string;
-};
-
-const serialiseStored = (stored: StoredInvoice): SerialisedInvoice => ({
-  invoiceId: stored.invoiceId,
-  terms: {
-    amount: stored.terms.amount.toString(),
-    taxAmount: stored.terms.taxAmount.toString(),
-    currency: toHex(stored.terms.currency),
-    tokenType: toHex(stored.terms.tokenType),
-    sellerPayout: toHex(stored.terms.sellerPayout),
-    buyerPayout: toHex(stored.terms.buyerPayout),
-    orderRef: toHex(stored.terms.orderRef),
-    itemsHash: toHex(stored.terms.itemsHash),
-    memoHash: toHex(stored.terms.memoHash),
-  },
-  termsSalt: toHex(stored.termsSalt),
-  fieldSalts: stored.fieldSalts.map(toHex),
-  nonce: toHex(stored.nonce),
-  sellerKey: stored.sellerKey,
-  buyerKey: stored.buyerKey,
-  dueDate: stored.dueDate.toString(),
-  issuedAt: stored.issuedAt.toString(),
-  pin: stored.pin.toString(),
-  ...(stored.sellerEncryptionKey === undefined
-    ? {}
-    : { sellerEncryptionKey: stored.sellerEncryptionKey }),
-});
-
-/** Read a field a shared record cannot be understood without. */
-const requireField = (value: unknown, name: string): string => {
-  if (typeof value !== 'string') {
-    throw new QuietBooksError(
-      `shared invoice is missing ${name}. It was written by an older version of ` +
-        'QuietBooks, whose terms were committed to differently, so it cannot be ' +
-        'opened here. Ask the counterparty to export it again.',
-      'importInvoice',
-    );
-  }
-  return value;
-};
-
-const deserialiseStored = (value: unknown): StoredInvoice => {
-  const raw = value as SerialisedInvoice;
-  if (typeof raw?.invoiceId !== 'string' || !Array.isArray(raw?.fieldSalts)) {
-    throw new QuietBooksError('shared invoice is missing required fields', 'importInvoice');
-  }
-  return {
-    invoiceId: raw.invoiceId,
-    terms: {
-      amount: BigInt(raw.terms.amount),
-      taxAmount: BigInt(raw.terms.taxAmount),
-      currency: fromHex(raw.terms.currency),
-      // Required, and refused loudly when absent.
-      //
-      // Substituting the native token here would be worse than failing: a
-      // record shared before this field existed was committed to under rules
-      // version 1, whose terms encoding had no token type at all, so its
-      // commitment cannot open against version 2 whatever is filled in. The
-      // import would succeed and the first settlement would fail deep inside a
-      // circuit with a message about terms not opening.
-      tokenType: fromHex(requireField(raw.terms?.tokenType, 'terms.tokenType')),
-      sellerPayout: fromHex(requireField(raw.terms?.sellerPayout, 'terms.sellerPayout')),
-      buyerPayout: fromHex(requireField(raw.terms?.buyerPayout, 'terms.buyerPayout')),
-      orderRef: fromHex(raw.terms.orderRef),
-      itemsHash: fromHex(raw.terms.itemsHash),
-      memoHash: fromHex(raw.terms.memoHash),
-    },
-    termsSalt: fromHex(raw.termsSalt),
-    fieldSalts: raw.fieldSalts.map(fromHex),
-    nonce: fromHex(raw.nonce),
-    sellerKey: raw.sellerKey,
-    buyerKey: raw.buyerKey,
-    dueDate: BigInt(raw.dueDate),
-    issuedAt: BigInt(raw.issuedAt),
-    pin: BigInt(raw.pin),
-    role: 'buyer',
-    ...(typeof raw.sellerEncryptionKey === 'string'
-      ? { sellerEncryptionKey: raw.sellerEncryptionKey }
-      : {}),
   };
 };
 
