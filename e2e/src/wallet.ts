@@ -35,6 +35,12 @@ import {
   type EnvironmentConfiguration,
 } from '@midnight-ntwrk/testkit-js';
 import type { WalletFacade, FacadeState, UnshieldedKeystore } from '@midnight-ntwrk/wallet-sdk';
+import {
+  ShieldedAddress,
+  ShieldedCoinPublicKey,
+  ShieldedEncryptionPublicKey,
+  type UnshieldedAddress,
+} from '@midnight-ntwrk/wallet-sdk-address-format';
 import * as Rx from 'rxjs';
 import type { Logger } from 'pino';
 
@@ -242,6 +248,85 @@ const COST_DIMENSIONS = [
   'bytesWritten',
   'bytesChurned',
 ] as const satisfies readonly (keyof SyntheticCost)[];
+
+/**
+ * Where a wallet receives money, in both forms the ledger has.
+ *
+ * A shielded address is the coin public key and the encryption public key
+ * together, which is why paying a stranger needs both: the first says which
+ * output is theirs, the second is what the ciphertext beside it is built for.
+ * The unshielded address the wallet already tracks in its own state.
+ */
+export const addressesOf = async (
+  ctx: WalletContext,
+): Promise<{ shielded: ShieldedAddress; unshielded: UnshieldedAddress }> => {
+  const state = await Rx.firstValueFrom(
+    ctx.wallet.state().pipe(Rx.filter((s) => s.unshielded !== undefined)),
+  );
+  return {
+    shielded: new ShieldedAddress(
+      ShieldedCoinPublicKey.fromHexString(ctx.shieldedSecretKeys.coinPublicKey),
+      ShieldedEncryptionPublicKey.fromHexString(ctx.shieldedSecretKeys.encryptionPublicKey),
+    ),
+    unshielded: state.unshielded.address,
+  };
+};
+
+/**
+ * Move NIGHT from one wallet to another and wait for the recipient to see it.
+ *
+ * On the `undeployed` preset the genesis seed holds the entire minted supply and
+ * every other seed starts empty, so a second party has to be funded from the
+ * first before it can do anything. There is no faucet to ask.
+ *
+ * Both forms are sent. A wallet holding only unshielded NIGHT can pay fees and
+ * still fail to fund an escrow or a shielded settlement, and that failure
+ * surfaces deep inside balancing rather than at the point the funds were
+ * checked -- the same trap `waitForFunds` logs the split for.
+ *
+ * The recipient is registered for DUST afterwards, because unregistered NIGHT
+ * generates none and fees are paid in DUST. A transfer that lands and a wallet
+ * that cannot spend look identical until the first transaction fails.
+ */
+export const fundWallet = async (
+  from: WalletContext,
+  to: WalletContext,
+  logger: Logger,
+  amounts: { shielded: bigint; unshielded: bigint },
+): Promise<bigint> => {
+  const { shielded, unshielded } = await addressesOf(to);
+  const night = nativeToken().raw;
+
+  logger.info(
+    `funding ${unshielded.hexString.slice(0, 16)}.. with ` +
+      `${amounts.unshielded} unshielded and ${amounts.shielded} shielded NIGHT`,
+  );
+
+  const recipe = await from.wallet.transferTransaction(
+    [
+      {
+        type: 'unshielded',
+        outputs: [{ type: night, receiverAddress: unshielded, amount: amounts.unshielded }],
+      },
+      {
+        type: 'shielded',
+        outputs: [{ type: night, receiverAddress: shielded, amount: amounts.shielded }],
+      },
+    ],
+    { shieldedSecretKeys: from.shieldedSecretKeys, dustSecretKey: from.dustSecretKey },
+    { ttl: ttlOneHour(), payFees: true },
+  );
+
+  const signed = await from.wallet.signRecipe(recipe, (payload) =>
+    from.unshieldedKeystore.signData(payload),
+  );
+  const id = await from.wallet.submitTransaction(await from.wallet.finalizeRecipe(signed));
+  logger.info(`funding transaction ${id}`);
+
+  const balance = await waitForFunds(to, logger);
+  await registerForDust(to, logger);
+  return balance;
+};
 
 /**
  * The block limit for each cost dimension, in that dimension's own units.
