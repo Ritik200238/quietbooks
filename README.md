@@ -327,7 +327,7 @@ This deploys the contract with real ZK proofs and runs the whole business flow
 against the live node and indexer, asserting every step against state read back
 through the indexer rather than against the local result of the call.
 
-Twenty-one steps, all passing as of the last run:
+Twenty-seven steps, all passing as of the last run:
 
 ```
 PASS  build wallet from the genesis seed
@@ -350,10 +350,61 @@ PASS  the contract holds the coin, and its value is public
 PASS  the buyer opens the deployment through the API
 PASS  the buyer releases the escrow to the seller              (59.2s)
 PASS  the chain shows the escrow paid out and the vault emptied
+PASS  issue an invoice with an arbiter named
+PASS  the buyer funds it
+PASS  the buyer escalates to the arbiter
+PASS  the chain shows the invoice under dispute
+PASS  the arbiter rules for the seller, through the API
+PASS  the chain shows the ruling, the payout and the counters
 PASS  a party who has never seen this deployment can join it
 
-21/21 steps passed
+27/27 steps passed
 ```
+
+### Two wallets, because one cannot prove a payment
+
+```bash
+npm run e2e:two-party
+```
+
+The run above makes the seller, buyer and arbiter three PINs of one wallet.
+That is an honest test of the authorisation rules — the contract checks a party
+key derived from a secret, and three PINs give three genuinely different keys —
+and a poor test of payment. Paying the wrong party is invisible when every
+party is you. So is a shielded output the recipient cannot decrypt, because
+midnight-js already knows the connected wallet's encryption key.
+
+Both of those were real bugs here, and neither was visible to a one-wallet
+harness. The seller payout was unbound, so a buyer could settle by paying
+themselves and have the invoice recorded as settled in full. The shared record
+carried no seller encryption key, so a payment to anyone but yourself could not
+be constructed at all.
+
+This funds a second wallet from the genesis one — there is no faucet on this
+preset, so the NIGHT is transferred and registered for DUST — then deploys,
+issues, exports, imports and settles between two wallets that share no keys and
+keep separate private state.
+
+```
+PASS  the two wallets share no keys
+PASS  the seller funds the buyer, who is a stranger to it
+PASS  the seller issues an invoice to the buyer
+PASS  the seller exports the record and the buyer imports it
+PASS  the buyer pays the seller, who is a different wallet     (100.5s)
+PASS  the money arrived in the seller's wallet, not the buyer's
+PASS  the chain records the settlement and still hides the amount
+
+15/15 steps passed
+```
+
+The assertion the other run cannot make is the second to last: the seller's
+shielded balance rises by exactly the invoiced total and the buyer's falls by
+it. Then the amount is checked absent from the anchor and the settlement
+record, its components included, so "hidden" is asserted rather than asserted
+about.
+
+It bites: dropping the seller's encryption key from the settle call fails it
+with `Unable to resolve encryption public key for recipient`.
 
 The times are real, from one run on an ordinary laptop with nothing else
 competing for it. They are not a benchmark — an earlier run with a compile going
@@ -671,12 +722,10 @@ Stated plainly, because a roadmap that only lists wins is not a roadmap.
   so every invoice they create is denominated in the native token. The
   enforcement is real and tested; the choice is not yet offered. See **[Paying in
   the wrong token](#paying-in-the-wrong-token)**.
-- **The end-to-end run uses one wallet for every role.** Seller, buyer and
-  arbiter are three PINs of the same wallet, which is a real test of the
-  authorisation rules and a poor test of payment: a payment to the wrong party is
-  structurally invisible when every party is you. The circuit tests cover the
-  binding and the mutation sweep confirms they bite, but a genuine two-wallet run
-  against the local node is not built.
+- **A wallet-connected run of the web interface.** Everything that does not need
+  a browser wallet has been driven in a real browser, and the contract is covered
+  end to end through a headless wallet. What is untested is Lace itself on
+  TestNet, which no harness here can stand in for.
 - The threshold proof over the reliability counters is written and was deployed
   in an earlier build, but does not fit in the current deploy alongside escrow
   and disputes. The counters are still kept. See **[Why twelve entry
