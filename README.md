@@ -385,11 +385,16 @@ headless wallet against the local network instead.
 ### The CLI
 
 ```bash
-npm run dev --workspace @quietbooks/cli
+npm run cli
 ```
 
 Same contract, same API, no browser or extension. [`cli/README.md`](./cli/README.md)
 lists what it does and, as usefully, what it does not.
+
+Run it from a shell that can reach Docker. The standalone launcher starts the
+local network itself through the testkit, so on Windows it has to run inside
+WSL: from the host it cannot see the daemon and stops with "could not find a
+working container runtime".
 
 ---
 

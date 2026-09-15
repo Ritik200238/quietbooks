@@ -28,7 +28,7 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import { unshieldedToken } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { assertIsContractAddress } from '@midnight-ntwrk/midnight-js-utils';
-import type { TestEnvironment } from '@midnight-ntwrk/testkit-js';
+import type { EnvironmentConfiguration, TestEnvironment } from '@midnight-ntwrk/testkit-js';
 import type { Logger } from 'pino';
 
 import {
@@ -253,6 +253,40 @@ const closeStore = async (providers: QuietBooksProviders, logger: Logger): Promi
   await candidate.close();
 };
 
+/**
+ * Start the network, and explain the one failure that is not about the network.
+ *
+ * On a standalone run the testkit starts Docker containers through
+ * testcontainers, which reports a missing daemon as "Could not find a working
+ * container runtime strategy". That sentence is true and useless: it names no
+ * remedy, and the most common way to reach it is not a broken install but
+ * running the CLI from a Windows shell, where Docker lives inside WSL and is not
+ * on the host's PATH at all.
+ *
+ * The underlying error is kept as the cause, because somebody debugging the
+ * daemon itself still needs it.
+ */
+const startEnvironment = async (testEnv: TestEnvironment): Promise<EnvironmentConfiguration> => {
+  try {
+    return await testEnv.start();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/container runtime/i.test(message)) {
+      throw error;
+    }
+    throw new Error(
+      'no Docker daemon is reachable from this shell, so the local network ' +
+        'cannot be started.\n' +
+        '    On Windows, Docker Desktop runs inside WSL: start the CLI from a WSL\n' +
+        '    shell rather than from PowerShell or Git Bash.\n' +
+        '    Otherwise check that Docker is running (`docker ps` should answer).\n' +
+        '    To use a network that is already up instead of starting one, run the\n' +
+        '    preview or preprod launcher, which connect rather than spawn.',
+      { cause: error },
+    );
+  }
+};
+
 export const run = async (config: Config, testEnv: TestEnvironment, logger: Logger): Promise<void> => {
   const rli: Interface = createInterface({ input, output, terminal: true });
   const ask = new Prompter(rli);
@@ -277,7 +311,7 @@ export const run = async (config: Config, testEnv: TestEnvironment, logger: Logg
     out('  Starting the network environment. On a standalone run this pulls and starts');
     out('  Docker containers, which can take a few minutes the first time.');
 
-    const environment = await testEnv.start();
+    const environment = await startEnvironment(testEnv);
     logger.info({ environment }, 'environment started');
     out('  Environment ready.');
 
