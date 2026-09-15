@@ -366,6 +366,9 @@
     border-radius: 0 6px 6px 0;
   }
   .callout p { color: var(--ink); max-width: var(--measure); }
+  /* Callouts carrying more than one paragraph ran them together, because the
+     reset strips paragraph margins and nothing put them back here. */
+  .callout p + p { margin-top: 0.7em; }
 
   .note { font-size: 0.85rem; color: var(--ink-3); max-width: var(--measure); }
 
@@ -636,9 +639,21 @@ instance of the same contract in the same segment.</pre>
     </div>
     <div class="callout">
       <p>The check that matters most is containment: an envelope disclosing more than its
-        grant allows must <strong>fail</strong>, not be trusted. It is enforced against the fields
-        inside the ciphertext, not the header, because whoever seals the envelope holds
-        the key and can seal a header that lies.</p>
+        grant allows must <strong>fail</strong>, not be trusted. It is enforced against the
+        fields inside the ciphertext, not the header, because whoever seals the envelope
+        holds the key and can seal a header that lies.</p>
+      <p>That was not enough, and the way it was not enough is the sharpest bug in this
+        project. Every check read the parsed JSON object; the auditor receives bytes.
+        <code>JSON.parse</code> keeps the last of two identical keys and drops the first
+        silently, so a seller could write <code>"disclosed"</code> twice &mdash; ungranted
+        fields first, the granted one second. Containment counted one field and passed. The
+        auditor decrypted the text and read all of them, with salts that open the real
+        commitments on chain, inside a document this validator had certified as contained.</p>
+      <p>No care inside the eight checks could have caught it, because they all read the
+        parse. The fix is a different question: the payload has to <strong>be</strong> its
+        canonical form, not merely parse to it. Re-serialise what was parsed, require it to
+        equal what was decrypted, and duplicate keys, padding, key order and unicode-escape
+        spellings fail together.</p>
     </div>
   </section>
 
