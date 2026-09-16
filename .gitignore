@@ -43,5 +43,7 @@ e2e/probe/probe.compact
 e2e/midnight-level-db/
 .gstack/
 
+# Vercel CLI link state, and the OIDC token `vercel link` writes beside it.
+# Narrower than `.env*`, which would also match the committed `.env.example`.
 .vercel
-.env*
+.env*.local
