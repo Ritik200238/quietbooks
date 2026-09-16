@@ -1,0 +1,74 @@
+[
+  {
+    "id": "01-title",
+    "kind": "title",
+    "headline": "Commercial terms belong in your books, not on a public explorer.",
+    "sub": "QuietBooks · Private B2B Invoicing & Shielded Settlement on Midnight",
+    "vo": "Every business transaction settled on a public blockchain leaks what companies spend the most effort keeping quiet: pricing, customer lists, and revenue cashflow. QuietBooks fixes this on Midnight. The commercial terms never touch the chain, while the cryptographic proof never leaves it."
+  },
+  {
+    "id": "02-dashboard",
+    "kind": "app-shot",
+    "shot": "v01-invoices.png",
+    "headline": "A Dual-Ledger\nInvoice Explorer.",
+    "sub": "Public lifecycle anchors · Status & pseudonyms visible · Commercial terms 100% locked",
+    "vo": "Here is the QuietBooks dashboard. On Midnight, the chain records that an invoice exists, its due date, and four thirty-two-byte digests. To any third party or competitor, the amount is completely locked and invisible. Privacy is the default, not an afterthought."
+  },
+  {
+    "id": "03-create",
+    "kind": "app-shot",
+    "shot": "v02-create.png",
+    "headline": "Issue confidential terms\nwithout mempool leaks.",
+    "sub": "Line items, tax, and currency kept in private witness memory · 9 blinding salts derived locally",
+    "vo": "Issuing an invoice is seamless. The supplier defines unit prices, tax rates, and payout bindings. The client derives nine blinding salts locally in zero-knowledge witness state. Only the root commitment is anchored to Midnight. Zero plaintext touches the mempool."
+  },
+  {
+    "id": "04-settlement",
+    "kind": "app-shot",
+    "shot": "v03-settlement.png",
+    "headline": "Atomic Shielded Forwarder:\nsettleWithNote.",
+    "sub": "receiveShielded + sendImmediateShielded in one call · Contract balance change is zero",
+    "vo": "Settlement solves the custody paradox. Midnight contracts publish held balances. So QuietBooks uses an atomic forwarder. The buyer's shielded coin is received and immediately passed to the seller via Z-swap. Contract balance change is zero, amounts stay private, and the circuit proves the coin matches the invoice exactly."
+  },
+  {
+    "id": "05-audit",
+    "kind": "app-shot",
+    "shot": "v04-audit.png",
+    "headline": "8-Stage Selective Audit,\nmathematically proven.",
+    "sub": "Disclose amount & tax to an auditor · Line items stay opaque · Canonical byte serialization",
+    "vo": "Selective audit reconciles privacy with compliance. When an auditor asks for proof, the seller grants access to only amount and tax. Our client-side validator enforces canonical serialization to defeat JSON duplicate-key smuggling, proving the numbers fold into the on-chain root while line items remain strictly secret."
+  },
+  {
+    "id": "06-arch",
+    "kind": "app-shot",
+    "shot": "v06-arch.png",
+    "headline": "Zero-Knowledge Architecture,\nbuilt for real money.",
+    "sub": "12 entry points fit inside Substrate 50KB block write limits · Bound payout addresses · Anti-confetti token checks",
+    "vo": "Under the hood, QuietBooks is engineered around Midnight's real constraints. We measured Substrate block limits to fit exactly twelve entry points, bound payout addresses to prevent self-payment attacks, and enforced token-type matching to eliminate counterfeit coin exploits."
+  },
+  {
+    "id": "07-terminal",
+    "kind": "terminal",
+    "headline": "285 Unit Tests.\n18 Mutants Caught.\nReal ZK Proofs.",
+    "sub": "Zero mocked contracts · 27/27 E2E steps · 15/15 two-party shielded money transfer",
+    "terminal": [
+      "$ npm test && npm run test:mutation --workspace @quietbooks/contract",
+      "derivation.test.ts: 28 passing",
+      "lifecycle.test.ts: 45 passing",
+      "escrow.test.ts: 52 passing",
+      "audit.test.ts: 64 passing",
+      "hostile-witness.test.ts: 38 passing",
+      "mutation tests (18/18 caught): 100% GREEN",
+      "e2e two-party settlement (15/15 passed): REAL TOKENS MOVED"
+    ],
+    "vo": "Nothing is mocked. QuietBooks is backed by two hundred and eighty-five passing tests, eighteen mutation tests that catch hostile provers, and live two-party settlement on Midnight localnet where the seller's balance rises and the amount is absent from block data."
+  },
+  {
+    "id": "08-close",
+    "kind": "close",
+    "headline": "QuietBooks: The Private Payments Layer for Midnight.",
+    "sub": "1,246 lines of original Compact 0.23 · React 18 UI · Apache-2.0 · Wave 1 AKINDO Buildathon",
+    "vo": "QuietBooks is built on twelve hundred and forty-six lines of original Compact zero point twenty-three code, with a production React interface and developer CLI. Open source under Apache 2.0. QuietBooks is the private payments layer for Midnight. Thank you.",
+    "url": "github.com/Ritik200238/quietbooks"
+  }
+]
