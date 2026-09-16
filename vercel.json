@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm ci --ignore-scripts",
+  "buildCommand": "bash scripts/vercel-build.sh",
+  "outputDirectory": "ui/dist",
+  "headers": [
+    {
+      "source": "/(keys|zkir)/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, s-maxage=86400, must-revalidate" }
+      ]
+    }
+  ]
+}

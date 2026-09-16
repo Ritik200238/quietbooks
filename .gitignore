@@ -42,3 +42,6 @@ e2e/probe/probe.compact
 # LevelDB stores the harness creates for its own private state.
 e2e/midnight-level-db/
 .gstack/
+
+.vercel
+.env*
