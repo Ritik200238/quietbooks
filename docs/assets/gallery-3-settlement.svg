@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgG3" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0b0e14" />
+      <stop offset="100%" stop-color="#07080c" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1000" height="600" fill="url(#bgG3)" rx="12" stroke="#1b2130" stroke-width="1.5" />
+
+  <!-- Browser Chrome -->
+  <rect width="1000" height="42" fill="#121622" rx="12" />
+  <circle cx="24" cy="21" r="5" fill="#d97b72" />
+  <circle cx="40" cy="21" r="5" fill="#d3a55c" />
+  <circle cx="56" cy="21" r="5" fill="#6cbb8e" />
+  <rect x="250" y="10" width="500" height="22" rx="6" fill="#080a0f" stroke="#1f283d" stroke-width="1" />
+  <text x="500" y="25" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#7ea0e8" text-anchor="middle">https://quietbooks.network/invoices/INV-2026-001 &middot; Settlement Portal</text>
+
+  <!-- Container -->
+  <g transform="translate(40, 60)">
+    <!-- Header with Badges -->
+    <text x="0" y="28" font-family="'Newsreader', Georgia, serif" font-size="28" font-weight="500" fill="#ffffff">Invoice INV-2026-001</text>
+    <rect x="260" y="10" width="80" height="24" rx="12" fill="#163825" />
+    <text x="300" y="26" font-family="'IBM Plex Sans', sans-serif" font-size="11" font-weight="600" fill="#6cbb8e" text-anchor="middle">UNPAID</text>
+
+    <text x="0" y="52" font-family="'IBM Plex Sans', sans-serif" font-size="12" fill="#9aa2ae">Issued by 0x3b1...e10 &middot; Due in 14 days &middot; Atomic settlement ready</text>
+
+    <!-- 3 Settlement Choices Grid -->
+    <g transform="translate(0, 75)">
+      <!-- Choice 1: settleWithNote (Recommended & Primary!) -->
+      <rect width="920" height="135" rx="8" fill="#111c16" stroke="#245938" stroke-width="1.5" />
+      <g transform="translate(24, 24)">
+        <circle cx="16" cy="16" r="14" fill="#163825" />
+        <text x="16" y="21" font-family="'IBM Plex Mono', monospace" font-size="14" fill="#6cbb8e" text-anchor="middle">&#9889;</text>
+        <text x="44" y="16" font-family="'IBM Plex Sans', sans-serif" font-size="15" font-weight="600" fill="#ffffff">Atomic Shielded Forwarder (settleWithNote)</text>
+        <rect x="375" y="2" width="105" height="20" rx="10" fill="#163825" />
+        <text x="427" y="16" font-family="'IBM Plex Sans', sans-serif" font-size="10" font-weight="600" fill="#6cbb8e" text-anchor="middle">RECOMMENDED</text>
+
+        <text x="44" y="38" font-family="'IBM Plex Sans', sans-serif" font-size="12" fill="#9aa2ae">Transfers coin from buyer directly to seller inside one transaction via Zswap. Contract balance remains exactly 0.</text>
+        <text x="44" y="56" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#6cbb8e">&#10003; Amount remains 100% hidden on-chain &middot; Enforces exact total &amp; tokenType match in ZK circuit</text>
+
+        <rect x="710" y="14" width="160" height="42" rx="6" fill="#1b4d2e" stroke="#2f7a52" />
+        <text x="790" y="40" font-family="'IBM Plex Sans', sans-serif" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">Pay &amp; Settle (ZK)</text>
+      </g>
+
+      <!-- Choice 2: settleAttested (Off-Chain Wire) -->
+      <g transform="translate(0, 150)">
+        <rect width="920" height="100" rx="8" fill="#101522" stroke="#202c42" stroke-width="1" />
+        <g transform="translate(24, 20)">
+          <circle cx="16" cy="16" r="14" fill="#1c2538" />
+          <text x="16" y="21" font-family="'IBM Plex Mono', monospace" font-size="13" fill="#7ea0e8" text-anchor="middle">&#128221;</text>
+          <text x="44" y="16" font-family="'IBM Plex Sans', sans-serif" font-size="14" font-weight="600" fill="#ffffff">Seller Bank Wire Attestation (settleAttested)</text>
+          <text x="44" y="38" font-family="'IBM Plex Sans', sans-serif" font-size="12" fill="#9aa2ae">For traditional banking, SEPA, or Fedwire settlement outside Midnight. The seller signs a cryptographic receipt.</text>
+          <text x="44" y="54" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#7ea0e8">Only callable by seller &middot; Updates reliability score without touching token rails</text>
+
+          <rect x="710" y="10" width="160" height="38" rx="6" fill="#192236" stroke="#3e63b8" />
+          <text x="790" y="34" font-family="'IBM Plex Sans', sans-serif" font-size="12" font-weight="600" fill="#7ea0e8" text-anchor="middle">Attest Receipt</text>
+        </g>
+      </g>
+
+      <!-- Choice 3: Escrow Mode -->
+      <g transform="translate(0, 265)">
+        <rect width="920" height="115" rx="8" fill="#17140f" stroke="#3d2f17" stroke-width="1" />
+        <g transform="translate(24, 20)">
+          <circle cx="16" cy="16" r="14" fill="#362814" />
+          <text x="16" y="21" font-family="'IBM Plex Mono', monospace" font-size="13" fill="#d3a55c" text-anchor="middle">&#128274;</text>
+          <text x="44" y="16" font-family="'IBM Plex Sans', sans-serif" font-size="14" font-weight="600" fill="#ffffff">Contract Escrow Vault (fundEscrow)</text>
+          <rect x="315" y="2" width="95" height="20" rx="10" fill="#382d16" />
+          <text x="362" y="16" font-family="'IBM Plex Sans', sans-serif" font-size="10" font-weight="600" fill="#d3a55c" text-anchor="middle">PUBLIC AMOUNT</text>
+
+          <text x="44" y="38" font-family="'IBM Plex Sans', sans-serif" font-size="12" fill="#9aa2ae">Locks the coin inside the contract. Allows milestones, refund deadlines, and third-party arbiter resolution.</text>
+          <text x="44" y="54" font-family="'IBM Plex Mono', monospace" font-size="11" fill="#d3a55c">&#9888; Note: Midnight contract holdings are public on-chain. Amount becomes readable.</text>
+
+          <rect x="710" y="16" width="160" height="38" rx="6" fill="#2d2212" stroke="#d3a55c" />
+          <text x="790" y="40" font-family="'IBM Plex Sans', sans-serif" font-size="12" font-weight="600" fill="#d3a55c" text-anchor="middle">Lock in Escrow</text>
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>

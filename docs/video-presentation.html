@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920,height=1080">
+<title>QuietBooks Video Presentation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    background: #080a0f;
+    color: #e7e9ed;
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  .slide {
+    display: none;
+    width: 1920px;
+    height: 1080px;
+    padding: 80px 110px;
+    background: radial-gradient(circle at 80% 20%, rgba(62, 99, 184, 0.12) 0%, transparent 60%),
+                radial-gradient(circle at 10% 80%, rgba(108, 187, 142, 0.08) 0%, transparent 50%),
+                #080a0f;
+    position: relative;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .slide.active { display: flex; }
+
+  /* Top brand bar */
+  .brand-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 24px;
+  }
+  .logo-box {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .wordmark {
+    font-family: 'Newsreader', Georgia, serif;
+    font-size: 34px;
+    font-weight: 500;
+    color: #ffffff;
+  }
+  .wordmark em { font-style: italic; color: #7ea0e8; }
+  .badge-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    color: #7ea0e8;
+    background: rgba(62, 99, 184, 0.18);
+    border: 1px solid rgba(126, 160, 232, 0.35);
+    padding: 6px 14px;
+    border-radius: 20px;
+  }
+  .progress-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    color: #9aa2ae;
+  }
+
+  /* Main body */
+  .slide-main {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 36px;
+    flex: 1;
+    padding: 30px 0;
+  }
+  .headline {
+    font-family: 'Newsreader', Georgia, serif;
+    font-size: 58px;
+    font-weight: 500;
+    line-height: 1.15;
+    color: #ffffff;
+    max-width: 1400px;
+    letter-spacing: -0.5px;
+  }
+  .headline span { color: #7ea0e8; }
+  .headline span.green { color: #6cbb8e; }
+  .subhead {
+    font-size: 24px;
+    color: #9aa2ae;
+    line-height: 1.5;
+    max-width: 1200px;
+  }
+
+  /* Card Grids */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 36px;
+  }
+  .grid-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 30px;
+  }
+  .card {
+    background: rgba(16, 21, 34, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 32px 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    backdrop-filter: blur(8px);
+  }
+  .card.highlight-blue {
+    border-color: #3e63b8;
+    background: rgba(20, 28, 48, 0.85);
+    box-shadow: 0 8px 32px rgba(62, 99, 184, 0.2);
+  }
+  .card.highlight-green {
+    border-color: #2f7a52;
+    background: rgba(17, 34, 25, 0.85);
+    box-shadow: 0 8px 32px rgba(108, 187, 142, 0.15);
+  }
+  .card.highlight-amber {
+    border-color: #9a6c1c;
+    background: rgba(36, 26, 14, 0.85);
+  }
+  .card-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .card-desc {
+    font-size: 16px;
+    color: #9aa2ae;
+    line-height: 1.55;
+  }
+  .card-code {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 12px 16px;
+    border-radius: 8px;
+    color: #7ea0e8;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  /* Stat numbers */
+  .stat-val {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 46px;
+    font-weight: 700;
+    color: #6cbb8e;
+  }
+
+  /* Bottom bar */
+  .footer-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding-top: 20px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: #6d7581;
+  }
+</style>
+</head>
+<body>
+
+  <!-- Slide 1: Title & Core Thesis -->
+  <div class="slide active" id="slide-1">
+    <div class="brand-bar">
+      <div class="logo-box">
+        <div class="wordmark">Quiet<em>Books</em></div>
+      </div>
+      <div class="badge-tag">MIDNIGHT BUILDATHON &middot; WAVE 1</div>
+      <div class="progress-tag">01 / 06</div>
+    </div>
+    <div class="slide-main">
+      <div class="headline">
+        Private B2B Invoicing &amp; Shielded Settlement on <span>Midnight</span>
+      </div>
+      <div class="subhead">
+        The commercial terms never touch the chain. The cryptographic proof never leaves it.
+      </div>
+      <div class="grid-3">
+        <div class="card highlight-blue">
+          <div class="card-title">&#128274; Complete Confidentiality</div>
+          <div class="card-desc">Invoice amount, tax, line items, currency, and buyer/seller commercial terms are kept in local zero-knowledge witness state.</div>
+        </div>
+        <div class="card highlight-green">
+          <div class="card-title">&#9889; Atomic Shielded Settle</div>
+          <div class="card-desc">Zswap coin routing in one transaction. Contract balance changes by zero. Value completely shielded on both legs.</div>
+        </div>
+        <div class="card">
+          <div class="card-title">&#128221; Selective Audit Engine</div>
+          <div class="card-desc">Prove exact invoice amount and tax to an auditor with zero leaked line items via 8-stage cryptographic containment.</div>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bar">
+      <div>Apache-2.0 &middot; Pure Compact 0.23 &middot; Zero Mocks</div>
+      <div>AKINDO Wave 1 Submission</div>
+    </div>
+  </div>
+
+  <!-- Slide 2: The Enterprise Privacy Dilemma -->
+  <div class="slide" id="slide-2">
+    <div class="brand-bar">
+      <div class="logo-box">
+        <div class="wordmark">Quiet<em>Books</em></div>
+      </div>
+      <div class="badge-tag">THE PROBLEM &amp; THE MIDNIGHT FIT</div>
+      <div class="progress-tag">02 / 06</div>
+    </div>
+    <div class="slide-main">
+      <div class="headline">
+        Public Ledgers are a <span>Catastrophe</span> for Enterprise Commerce
+      </div>
+      <div class="grid-2">
+        <div class="card" style="border-color:#d97b72; background:rgba(30,15,15,0.7);">
+          <div class="card-title" style="color:#d97b72;">&#10060; The Transparent Chain Leak</div>
+          <ul style="padding-left:20px; color:#9aa2ae; font-size:17px; line-height:1.7;">
+            <li><b style="color:#fff;">Competitor Espionage:</b> Competitors scrape your pricing and undercut your margins.</li>
+            <li><b style="color:#fff;">Client List Leaks:</b> Counterparty wallet addresses create a public customer CRM.</li>
+            <li><b style="color:#fff;">Cash Flow Exposure:</b> Payment velocity reveals company runway between funding rounds.</li>
+          </ul>
+        </div>
+        <div class="card highlight-green">
+          <div class="card-title" style="color:#6cbb8e;">&#10003; The QuietBooks Solution on Midnight</div>
+          <ul style="padding-left:20px; color:#9aa2ae; font-size:17px; line-height:1.7;">
+            <li><b style="color:#fff;">Public State:</b> Only lifecycle status, timestamps, and 4 opaque 32-byte digests.</li>
+            <li><b style="color:#fff;">Private State:</b> Commercial terms stay in off-chain wallet memory.</li>
+            <li><b style="color:#fff;">Mathematical Trust:</b> Verify commitments without disclosing raw data.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bar">
+      <div>Dual-Ledger Zero-Knowledge Architecture</div>
+      <div>Confidential Commercial Invoicing</div>
+    </div>
+  </div>
+
+  <!-- Slide 3: Settlement Rails & The Custody Breakthrough -->
+  <div class="slide" id="slide-3">
+    <div class="brand-bar">
+      <div class="logo-box">
+        <div class="wordmark">Quiet<em>Books</em></div>
+      </div>
+      <div class="badge-tag">CORE ENGINEERING &middot; 40% RUBRIC</div>
+      <div class="progress-tag">03 / 06</div>
+    </div>
+    <div class="slide-main">
+      <div class="headline">
+        Atomic Shielded Passthrough: <span>settleWithNote</span>
+      </div>
+      <div class="subhead">
+        Midnight contract custody publishes holdings publicly. QuietBooks routes payments with zero contract custody.
+      </div>
+      <div class="grid-3">
+        <div class="card highlight-green">
+          <div class="card-title">&#9889; settleWithNote (Private)</div>
+          <div class="card-desc"><b>Atomic Passthrough:</b> <code>receiveShielded</code> + <code>sendImmediateShielded</code> in one call. Contract balance changes by 0. Zswap shields amounts on both legs.</div>
+          <div class="card-code">Amount On-Chain: HIDDEN</div>
+        </div>
+        <div class="card">
+          <div class="card-title">&#128221; settleAttested (Wire/Fiat)</div>
+          <div class="card-desc"><b>Off-Chain Attestation:</b> Seller signs cryptographic receipt for traditional banking/wire rails. Updates reputation ledger without token transfer.</div>
+          <div class="card-code">Amount On-Chain: HIDDEN</div>
+        </div>
+        <div class="card highlight-amber">
+          <div class="card-title">&#128274; fundEscrow (Vault)</div>
+          <div class="card-desc"><b>Conditional Escrow:</b> Holds funds for milestone delivery. Guaranteed refund deadlines and designated arbiter dispute resolution.</div>
+          <div class="card-code">Amount On-Chain: PUBLIC</div>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bar">
+      <div>Zero Contract Balance Change &middot; Bound Payout Addresses &middot; Confetti Token Rejection</div>
+      <div>Three Settlement Pathways</div>
+    </div>
+  </div>
+
+  <!-- Slide 4: Selective Audit Engine -->
+  <div class="slide" id="slide-4">
+    <div class="brand-bar">
+      <div class="logo-box">
+        <div class="wordmark">Quiet<em>Books</em></div>
+      </div>
+      <div class="badge-tag">SELECTIVE DISCLOSURE PROTOCOL</div>
+      <div class="progress-tag">04 / 06</div>
+    </div>
+    <div class="slide-main">
+      <div class="headline">
+        8-Stage Cryptographic <span>Selective Audit</span>
+      </div>
+      <div class="subhead">
+        Disclose Amount &amp; Tax to a tax authority with mathematical proof, leaving line items opaque.
+      </div>
+      <div class="grid-2">
+        <div class="card highlight-blue">
+          <div class="card-title">&#128270; The 8-Check Containment Pipeline</div>
+          <div class="card-desc" style="font-size:15px; line-height:1.7;">
+            1. Enforce <code>quietbooks-audit/2</code> schema<br>
+            2. Verify on-chain grant is active and not revoked<br>
+            3. Enforce expiry against block clock<br>
+            4. Verify SHA-256 key preimage matches on-chain anchor<br>
+            5. <b style="color:#6cbb8e;">Strict Scope Containment (Defeats JSON parsing smuggling)</b><br>
+            6. Authenticated AES-256-GCM payload decryption<br>
+            7. Recompute per-field salt commitments<br>
+            8. Fold 9 digests into Merkle root and compare to chain
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">&#128737; Bug Caught: JSON Smuggling</div>
+          <div class="card-desc" style="font-size:15px; line-height:1.6;">
+            Standard <code>JSON.parse</code> drops duplicate keys silently, allowing a rogue seller to smuggle ungranted field salts past scope checks.<br><br>
+            <b>QuietBooks Fix:</b> Enforces canonical serialization where <code>reserialize(parse) === decrypted</code>. Rejects legacy v1 envelopes by name. Zero leaked confidential data.
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bar">
+      <div>9-Slot Boolean Vector &middot; Canonical Byte Verification &middot; Audit Envelopes</div>
+      <div>Enterprise Compliance</div>
+    </div>
+  </div>
+
+  <!-- Slide 5: Real Proofs & Empirical Evidence -->
+  <div class="slide" id="slide-5">
+    <div class="brand-bar">
+      <div class="logo-box">
+        <div class="wordmark">Quiet<em>Books</em></div>
+      </div>
+      <div class="badge-tag">VERIFIED EVIDENCE &middot; QA 15%</div>
+      <div class="progress-tag">05 / 06</div>
+    </div>
+    <div class="slide-main">
+      <div class="headline">
+        Real Proofs. Real Money. <span class="green">Zero Simulation.</span>
+      </div>
+      <div class="grid-3">
+        <div class="card highlight-green">
+          <div class="stat-val">285 / 285</div>
+          <div class="card-title">Unit Tests Passing</div>
+          <div class="card-desc">11-second in-process suite driving the compiled Compact contract directly via runtime. Zero Docker required.</div>
+        </div>
+        <div class="card highlight-blue">
+          <div class="stat-val">27 / 27</div>
+          <div class="card-title">Live E2E ZK Steps</div>
+          <div class="card-desc">Full contract lifecycle against local Midnight node, indexer, and real proof server with genuine proving keys.</div>
+        </div>
+        <div class="card highlight-green">
+          <div class="stat-val">15 / 15</div>
+          <div class="card-title">Two-Party Settle</div>
+          <div class="card-desc">Real token transfer between stranger wallets. Proves seller balance +N, buyer -N, and amount absent from block indexer.</div>
+        </div>
+      </div>
+      <div class="card" style="padding:20px 28px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <span style="font-weight:700; color:#fff; font-size:16px;">18 / 18 Mutation Tests Caught</span>
+            <span style="color:#9aa2ae; font-size:14px; margin-left:12px;">Reverts each security fix and confirms the test suite turns red.</span>
+          </div>
+          <div class="badge-tag" style="background:rgba(108,187,142,0.15); border-color:#2f7a52; color:#6cbb8e;">ALL MUTANTS CAUGHT</div>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bar">
+      <div>Substrate Block Limits Measured: 12 Entry Points (30,797 Bytes / 61.6% Limit)</div>
+      <div>Production Readiness</div>
+    </div>
+  </div>
+
+  <!-- Slide 6: Conclusion & Architecture Summary -->
+  <div class="slide" id="slide-6">
+    <div class="brand-bar">
+      <div class="logo-box">
+        <div class="wordmark">Quiet<em>Books</em></div>
+      </div>
+      <div class="badge-tag">SUMMARY &amp; SUBMISSION</div>
+      <div class="progress-tag">06 / 06</div>
+    </div>
+    <div class="slide-main">
+      <div class="headline">
+        QuietBooks: The <span>Private Payments Layer</span> for Midnight
+      </div>
+      <div class="subhead">
+        Ready for foundations, grant programs, B2B vendors, and decentralized ecosystems today.
+      </div>
+      <div class="grid-3">
+        <div class="card highlight-blue">
+          <div class="card-title">&#128187; Original Compact 0.23</div>
+          <div class="card-desc">1,246 lines of original smart contract code with dual-ledger anchors, bounded dispute resolution, and emergency pauses.</div>
+        </div>
+        <div class="card highlight-green">
+          <div class="card-title">&#127912; Full-Stack Surfaces</div>
+          <div class="card-desc">Production React 18 UI with Midnight Lace connector, interactive Node.js CLI, and comprehensive developer SDK.</div>
+        </div>
+        <div class="card">
+          <div class="card-title">&#128220; Apache-2.0 &amp; Attribution</div>
+          <div class="card-desc">Open source under Apache-2.0 with complete attribution to Midnight Foundation, OpenZeppelin, Selkie, and Alpaca.</div>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bar">
+      <div>GitHub: Ritik200238/quietbooks &middot; Topic: midnightntwrk</div>
+      <div>Built for the AKINDO Midnight Buildathon 2026</div>
+    </div>
+  </div>
+
+<script>
+  function updateFromHash() {
+    const hash = window.location.hash || '#1';
+    const match = hash.match(/\d+/);
+    const num = match ? parseInt(match[0], 10) : 1;
+    document.querySelectorAll('.slide').forEach(s => s.classList.remove('active'));
+    const target = document.getElementById('slide-' + num);
+    if (target) {
+      target.classList.add('active');
+    } else {
+      const first = document.getElementById('slide-1');
+      if (first) first.classList.add('active');
+    }
+  }
+  window.addEventListener('hashchange', updateFromHash);
+  window.addEventListener('DOMContentLoaded', updateFromHash);
+  updateFromHash();
+</script>
+</body>
+</html>

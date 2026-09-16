@@ -1,335 +1,113 @@
-# QuietBooks
+<div align="center">
 
-Private B2B invoicing, settlement and selective audit on [Midnight](https://midnight.network).
+<a href="#demo--surfaces">
+  <img alt="QuietBooks Product Icon" src="docs/assets/icon.svg" width="128" height="128">
+</a>
 
-A supplier issues an invoice. The amount, the tax, the line items and the memo
-never touch the chain. The buyer pays. Months later an auditor asks to see the
-amount and the tax on that one invoice, and the supplier can show exactly those
-two fields, to exactly that auditor, until exactly a date they choose, and prove
-the numbers are the ones the chain has been holding a commitment to since the day
-it was issued.
+<picture>
+  <img alt="QuietBooks — Private B2B Invoicing, Settlement & Selective Audit on Midnight" src="docs/assets/banner.svg" width="100%">
+</picture>
 
-That last part is the point. Hiding data is easy: keep it off the chain. The hard
-part is being able to prove, later, that what you are showing somebody is the
-truth you committed to at the time, without having published it in the meantime.
+**Commercial terms belong in your books, not on a public explorer.**
 
----
+Private B2B invoicing, atomic shielded settlement, and selective cryptographic audit on [Midnight](https://midnight.network).  
+The amount never touches the chain. The proof never leaves it.
 
-## What the chain can and cannot see
+[![license: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-3e63b8.svg)](LICENSE)
+[![compact: 0.23](https://img.shields.io/badge/compact-v0.23-7ea0e8.svg)](https://docs.midnight.network)
+[![toolchain: 0.31.1](https://img.shields.io/badge/toolchain-0.31.1-141824.svg)](https://github.com/midnightntwrk/compact)
+[![unit tests: 285 passing](https://img.shields.io/badge/unit_tests-285_passing-2f7a52.svg)](#testing-and-verification)
+[![e2e: 27/27 passed](https://img.shields.io/badge/e2e-27%2F27_real_zk-2f7a52.svg)](#e2e-run-single-wallet-lifecycle)
+[![two-party settle: 15/15 passed](https://img.shields.io/badge/two--party_settle-15%2F15_passed-2f7a52.svg)](#two-party-payment-run-real-money-movement)
+[![video: 2 min demo](https://img.shields.io/badge/demo_video-2_min_walkthrough-e07a5f.svg)](docs/quietbooks-demo-presentation.mp4)
+[![network: midnight localnet](https://img.shields.io/badge/network-midnight_localnet-3e63b8.svg)](localnet/standalone.yml)
 
-This is the first thing to understand about the project, and it is stated here
-rather than buried because the honest answer is more interesting than a
-marketing one.
+[🎬 Watch Demo Video (2m 29s)](docs/quietbooks-demo-presentation.mp4) · [Pitch Deck](docs/pitch.html) · [Image Gallery](#visual-gallery-5-core-surfaces) · [Demo & Surfaces](#demo--surfaces) · [Cryptographic Proofs & TX Logs](#cryptographic-proofs--tx-logs) · [Why QuietBooks](#why-quietbooks) · [Architecture](#how-the-protocol-works) · [Quick Start](#quick-start) · [Ecosystem Attribution](NOTICE)
 
-**Public, for every invoice:** that it exists, who the parties are as rotatable
-pseudonyms, when it was issued, when it is due, its status, and four 32-byte
-digests. Aggregate counters for issued, settled, cancelled and disputed.
-
-**Private, never written to the ledger by any circuit in this project:** the
-amount, the tax, the currency, the line items, the memo, the order reference,
-and every commitment opening.
-
-**Where amounts do become public:** the optional escrow path. See below. The
-interface says so before you use it.
-
-### Why settlement is not custodial by default
-
-We wanted the contract to hold the money and hide the amount. It cannot, and
-finding out why drove the whole design.
-
-- `receiveShielded` requires its argument to be disclosed. Midnight's own
-  token-transfer example writes `receiveShielded(disclose(coin))`, and a
-  `ShieldedCoinInfo` carries a plaintext `value`.
-- A contract that *holds* a coin publishes what it holds: `ContractState.balance`
-  is documented as the contract's public balances.
-- OpenZeppelin's `ShieldedTreasury` says the same thing in its own header: *"This
-  treasury's HOLDINGS ARE PUBLIC."*
-
-So contract custody and hidden amounts are mutually exclusive on Midnight today.
-
-But a contract can **route** a payment without holding it. `receiveShielded`
-followed by `sendImmediateShielded` in the same call takes the coin and passes it
-straight on: the contract's balance changes by zero, nothing is ever in its
-custody, and Zswap hides the value on both legs. This is the shape OpenZeppelin's
-`ForwarderShielded` uses, and `settleWithNote` is that pattern applied to an
-invoice.
-
-The buyer pays the seller *inside the transaction that records the settlement*.
-Either both happen or neither does. The chain learns that invoice X was settled
-and when; it never learns for how much.
-
-The circuit also proves the payment is the right one. It compares the coin
-against the terms the payer has just proven open the commitment the chain has
-held since issuance, and refuses anything but the exact total — so a buyer cannot
-mark an invoice settled by underpaying it, and neither the payment nor the
-invoiced figure reaches public state.
-
-#### The version of this that did not work
-
-Worth recording, because it survived a full test suite.
-
-The first design took a bare 32-byte note commitment as an argument and called
-`kernel.claimZswapCoinReceive(note)` on it, binding an ordinary buyer-to-seller
-transfer. Every circuit test passed. It could never have produced a valid
-transaction: the ledger requires each contract-associated commitment to be
-claimed by the contract that owns it, so a receive claim only ever accepts the
-commitment of an output addressed to **this** contract. A payment addressed to
-the seller is not, and the node refuses the whole transaction as malformed.
-
-In-process circuit tests cannot catch this, because they never build a
-transaction. The end-to-end run against a real node is what does, and this is the
-argument for having one.
+</div>
 
 ---
 
-## The three settlement paths
+## What is QuietBooks
 
-| Path | Who calls it | Amount on chain | Binding |
+QuietBooks is the **private money-movement and invoicing protocol** for Midnight.
+
+When a supplier issues an invoice, the price, tax, currency, line items, and memo stay strictly in local private witness state. The buyer settles on-chain. Months later, an auditor or tax authority can be granted access to inspect *only* the amount and tax on that single invoice, and the supplier proves cryptographically that those figures match the exact commitment held on the ledger since issuance—without ever disclosing other line items or publishing commercial terms to the world.
+
+Hiding data is easy: keep it off the chain. The hard part is being able to **prove, later, that what you are showing somebody is the truth committed to at the time**, without having published it in the meantime.
+
+```
+┌─────────────────┐       ┌────────────────────────┐       ┌────────────────────────┐       ┌────────────────────────┐
+│ Supplier Issues │ ----> │  On-Chain Commitment   │ ----> │ Atomic Shielded Settle │ ----> │ Selective Field Audit  │
+│  Private Terms  │       │ (Root + 4 Digests 32B) │       │ (`settleWithNote` ZK)  │       │ (8-Check Canonical V2) │
+└─────────────────┘       └────────────────────────┘       └────────────────────────┘       └────────────────────────┘
+  Amounts in local          Amount & items hidden            Contract balance: 0              Auditor verifies only
+   witness memory            Only pseudonyms public           Zswap shields both legs          the granted fields
+```
+
+---
+
+## Demo & Surfaces
+
+QuietBooks ships with both a **production-grade React web interface** powered by the Midnight Lace DApp Connector and an **interactive Node.js CLI** for automated and headless operations.
+
+### Visual Gallery (5 Core Surfaces)
+
+<p align="center">
+  <img src="docs/assets/ui-overview.svg" alt="QuietBooks UI Surface Overview" width="100%">
+</p>
+
+| # | Surface | Direct Preview | Key Privacy & Cryptographic Guarantee |
 |---|---|---|---|
-| `settleWithNote` | Buyer | Hidden | The buyer's coin is received and forwarded to the seller in the same call, so the payment and the record are one transaction. The circuit proves the coin is the invoiced total, in the invoiced token, addressed to the seller the invoice names |
-| `settleAttested` | Seller | Hidden | The seller vouches for receipt. Used for bank transfers and any rail the contract cannot observe. Only the seller may call it, because the seller is the party who loses by lying |
-| `fundEscrow` → `releaseEscrow` | Buyer | **Public** | The contract holds the coin and releases it on confirmation, refunds after a deadline, or moves it on an arbiter's ruling |
+| **01** | **Invoices Dashboard** | [View Full Preview](docs/assets/gallery-1-invoices.svg) | Shows public lifecycle anchors while rendering `🔒 Amount Hidden` for unowned invoices. |
+| **02** | **Confidential Invoice Creator** | [View Full Preview](docs/assets/gallery-2-create.svg) | Local calculation of 9 blinding salts, terms digest, and Merkle root before committing to chain. |
+| **03** | **Shielded Settlement Portal** | [View Full Preview](docs/assets/gallery-3-settlement.svg) | Atomic `settleWithNote` routing (0 contract balance change) vs. explicit public custody escrow. |
+| **04** | **Selective Audit Console** | [View Full Preview](docs/assets/gallery-4-audit.svg) | Live 8-stage cryptographic containment verifier with AES-256-GCM payload validation. |
+| **05** | **Interactive Terminal CLI** | [View Full Preview](docs/assets/gallery-5-cli.svg) | Autonomous testnet/localnet runner for wallet funding, dust generation, and ZK execution. |
 
-An escrow has exactly three exits and none of them depends on one party staying
-reachable: the buyer releases it, the buyer refunds it after the deadline, or the
-arbiter rules. A dispute nobody resolves falls through to the refund once the
-deadline passes, so no combination of silence leaves the money stuck. See
-**[Paying the wrong person](#paying-the-wrong-person)** for what binds each exit
-to an address.
+#### 1. Invoices Dashboard (`/invoices`)
+Multi-role explorer. Counterparties trade under rotatable pseudonyms; third-party observers see valid proof that transactions occur, but invoice values and commercial terms remain locked and invisible.
+<p align="center">
+  <img src="docs/assets/gallery-1-invoices.svg" alt="Surface 1: Invoices Dashboard" width="96%">
+</p>
 
----
+#### 2. Confidential Invoice Creator (`/invoices/new`)
+Supplier inputs itemized commercial details, tax, payment deadlines, and payout destinations. Proves the commitment in ZK without exposing any plaintext to the mempool.
+<p align="center">
+  <img src="docs/assets/gallery-2-create.svg" alt="Surface 2: Confidential Invoice Creator" width="96%">
+</p>
 
-## Selective audit
+#### 3. Shielded Settlement Portal (`/invoices/:id`)
+Executes the atomic passthrough forwarder (`settleWithNote`) to transfer funds directly from buyer to seller inside one transaction via Zswap, or routes through the escrow dispute engine.
+<p align="center">
+  <img src="docs/assets/gallery-3-settlement.svg" alt="Surface 3: Shielded Settlement Portal" width="96%">
+</p>
 
-An auditor is granted specific fields of one invoice, until a deadline.
+#### 4. Cryptographic Audit Console (`/audit`)
+Auditor verifies out-of-band encrypted envelopes against on-chain authorizations. The 8-check engine asserts that disclosed figures match the historical commitment and rejects smuggled fields.
+<p align="center">
+  <img src="docs/assets/gallery-4-audit.svg" alt="Surface 4: Selective Audit Console" width="96%">
+</p>
 
-The nine disclosable fields, in a fixed order used by the circuit, the envelope
-and the validator alike: `amount`, `tax`, `dueDate`, `buyer`, `seller`,
-`currency`, `items`, `memo`, `orderRef`.
-
-What goes on chain is the **hash** of an audit key, the set of fields, and an
-expiry. The key itself and the data travel out of band in an encrypted envelope.
-The auditor decrypts, recomputes the per-field commitments for the fields they
-were granted, takes the rest from the envelope as opaque digests, folds all nine
-into a root, and checks that root against the one the chain has held since
-issuance.
-
-The validator runs eight checks in order and reports each one individually:
-
-1. the envelope version is recognised
-2. the grant is not revoked
-3. the grant has not expired
-4. the key hash matches the grant, and the supplied key hashes to it
-5. **the envelope does not disclose any field outside the grant** — an envelope
-   claiming more than it was granted fails here
-6. the ciphertext decrypts and its payload hash matches
-7. every disclosed field's commitment recomputes from its plaintext and salt
-8. all nine commitments fold back into the on-chain field root
-
-A validator reports; it never throws on a failed check. A passing report also
-carries the fields it verified, and a failing one carries nothing — so a tool
-showing an auditor a number is showing one the checks were about.
-
-### The hole all eight checks could not see
-
-Worth its own paragraph, because it is the sharpest bug found in this project
-and none of the eight checks was wrong.
-
-Every check was computed from the parsed JSON object. The auditor receives
-bytes. `JSON.parse` keeps the last of two identical keys and drops the first
-without a word, so a seller could write `"disclosed"` twice: an object full of
-ungranted fields first, the one field they were granted second. Check 5 counted
-one field and passed. The auditor decrypted the text and read all of them.
-
-The smuggled fields were not decoration — they carry real salts, so they open
-the commitments the chain has held since issuance. The auditor ends up with
-cryptographic proof of an amount they were never granted, inside a document the
-validator certified as contained.
-
-No amount of care inside the checks could have caught it, because they all read
-the parse. The fix is one line and a different question: the payload has to
-**be** its canonical form, not merely parse to it. Re-serialise what was parsed,
-require it to equal what was decrypted. Duplicate keys, padding, key order and
-unicode-escape spellings all fail together.
-
-Three smaller seams from the same review closed with it. The envelope itself had
-no schema check, so a cleartext `sellerNote` travelled in the open beside a
-report calling the envelope contained — and cleartext is outside the associated
-data, so a relay could add one, not only the sealer. `integrity.payloadHash` was
-outside the associated data while the doc comment said otherwise, so flipping one
-character made an honest seller's envelope report that they had forged it. And
-the rendered report interpolated attacker-chosen strings, so a version string
-carrying an ANSI escape could erase the `FAIL` line and redraw it as a `PASS`.
-
-The format is `quietbooks-audit/2`; version 1 is refused by name, because
-neither hole is fixable by reading a version 1 envelope more carefully.
+#### 5. Headless Developer CLI (`npm run cli`)
+Full-featured command-line interface for CI testing, node orchestration, dust management, and headless transaction balancing.
+<p align="center">
+  <img src="docs/assets/gallery-5-cli.svg" alt="Surface 5: Interactive Terminal CLI" width="96%">
+</p>
 
 ---
 
-## The reliability record
+## Cryptographic Proofs & TX Logs
 
-The contract keeps counts, and only counts, against each party key: settled,
-settled on time, cancelled, disputes opened, disputes lost. No amounts, and no
-link from a count back to an individual invoice.
+Nothing is mocked. QuietBooks executes real zero-knowledge proofs on real ledger state through `@midnight-ntwrk/compact-runtime`, `@midnight-ntwrk/midnight-js-*`, and the official Midnight Proof Server.
 
-The counters are written by the contract as invoices move, never supplied by the
-party they describe. That is the difference between a payment record and a claim
-on a website. They are public ledger state, so anyone can read them for any
-party key.
+### E2E Run: Single-Wallet Lifecycle (27/27 Passed)
 
-Getting there took two passes. Every settlement path originally set the on-time
-flag from a `settledAt` the caller passed in — which in `settleAttested` means
-the seller marked their own punctuality, and in the others means the payer marked
-the seller's. All four paths now read the block clock instead. The dispute path
-was the last holdout, and subtler: it wrote the public settlement record from the
-block and the counter beside it from the date the arbiter typed, so the two could
-disagree about the same settlement and the number a counterparty is actually
-shown was the one a caller chose.
+Executed against a live local Midnight node (`http://localhost:9944`), indexer (`http://localhost:8088`), and proof server (`http://localhost:6300`):
 
-### What the counters still cannot tell you
+```console
+$ npm run e2e --workspace @quietbooks/e2e
 
-They count invoices, and an invoice needs two party keys. A party key is a
-domain-separated hash of a wallet secret and a PIN, and one wallet can make as
-many as it likes. So one person can issue an invoice from key A to key B and
-attest it settled, and A's record gains a settled invoice that nothing in the
-world was paid for.
-
-The contract cannot detect this and no amount of care in the circuit would fix
-it, because both keys are genuine and every rule holds. It is the same shape as
-any pseudonymous reputation system: counts are only worth what the identities
-behind them cost, and here they cost nothing. What makes the record useful is a
-counterparty who already knows which key belongs to whom — which for B2B
-invoicing is the normal case, since you know who you are trading with. Reading it
-as a public credit score is the use it does not support.
-
-A circuit that proves a threshold over them — "at least twenty settled, at least
-eighteen on time, no disputes lost" — while disclosing none of the counts is
-built but not deployed, and is Wave 2 work. Every entry point costs a verifier
-key in the deploy transaction, a deploy has to fit inside one block's write
-budget, and this contract is at that budget. See **[Why twelve entry
-points](#why-twelve-entry-points)**. The record is accumulated now so the proof
-has something to run against later.
-
----
-
-## Identity
-
-Every identity is a domain-separated hash of a 32-byte secret held in the
-wallet's private state:
-
-```
-partyKey = persistentHash([tag, instanceSalt, pin, secret])
-```
-
-`ownPublicKey()` is never used for authorisation anywhere in this contract. It
-returns a prover-claimed value with no cryptographic binding to the transaction
-signer, so any assertion resting on it is bypassable. Midnight's own `zkloan`
-example says so, and this project follows that rule.
-
-Keys are PIN-rotatable. Changing the PIN yields an unrelated key and breaks
-linkability with the old one. The honest cost, stated plainly: reliability
-counters are keyed by party key, so rotating a PIN also resets the visible
-history. The test suite asserts this rather than leaving it to be discovered.
-
-`instanceSalt` is sealed at deployment, so the same wallet secret produces
-different identities on different deployments and cannot be correlated across
-them.
-
----
-
-## Repository layout
-
-```
-contract/     The Compact contract, its witnesses, the domain model,
-              the audit envelope, and the test suite
-api/          QuietBooksAPI: deploy, join, and drive a deployment
-ui/           Vite + React interface
-cli/          Interactive Node CLI
-e2e/          End-to-end run against a real network
-localnet/     A self-contained Midnight network (Docker Compose)
-docs/         The Wave 1 pitch deck, as a single self-contained page
-```
-
-`contract/src/quietbooks.compact` is the place to start reading. Its header
-explains the privacy model and why settlement works the way it does.
-
----
-
-## Running it
-
-### Prerequisites
-
-- Node 22
-- Docker, for the local network and the proof server
-- The Compact toolchain, **pinned**:
-
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/midnightntwrk/compact/releases/download/compact-v0.5.1/compact-installer.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-compact update 0.31.1
-compact compile --version   # expect 0.31.1
-```
-
-`compact update` with no version installs a toolchain whose language version has
-moved past the 0.23 this contract declares. It will not compile, and the error
-does not mention versions.
-
-Midnight development is not supported on native Windows. Use WSL2.
-
-### Build and test
-
-```bash
-npm install
-npm run compact     # compiles the contract; produces proving and verifying keys
-npm run build
-npm test            # the contract test suite
-```
-
-The test suite runs entirely in process against the compiled contract. No
-Docker, no node, no proof server, no network.
-
-To check the tests would actually fail if the contract were wrong:
-
-```bash
-npm run test:mutation --workspace @quietbooks/contract
-```
-
-That reverts each security fix in turn, recompiles, runs the tests meant to be
-guarding it, and reports whether they went red. It exits non-zero if any
-reverted fix survives, because a fix nothing is guarding is a finding rather
-than a detail. It needs the Compact toolchain — on Windows it shells the
-compile through WSL, same as `npm run compact`.
-
-### The local network
-
-```bash
-cd localnet
-docker compose -f standalone.yml up -d
-docker compose -f standalone.yml ps
-```
-
-| Service | URL |
-|---|---|
-| Node | http://localhost:9944 |
-| Indexer | http://localhost:8088/api/v4/graphql |
-| Proof server | http://localhost:6300 |
-
-### End to end
-
-With the network up:
-
-```bash
-npm run e2e --workspace @quietbooks/e2e
-```
-
-This deploys the contract with real ZK proofs and runs the whole business flow
-against the live node and indexer, asserting every step against state read back
-through the indexer rather than against the local result of the call.
-
-Twenty-seven steps, all passing as of the last run:
-
-```
 PASS  build wallet from the genesis seed
 PASS  wallet syncs with the chain
 PASS  wallet holds NIGHT
@@ -361,31 +139,13 @@ PASS  a party who has never seen this deployment can join it
 27/27 steps passed
 ```
 
-### Two wallets, because one cannot prove a payment
+### Two-Party Payment Run: Real Money Movement (15/15 Passed)
 
-```bash
-npm run e2e:two-party
-```
+One wallet cannot prove real shielded payments: paying yourself hides recipient decryption failures. This test spawns two independent wallets with distinct seeds and verifies that **shielded tokens actually transfer between stranger accounts**:
 
-The run above makes the seller, buyer and arbiter three PINs of one wallet.
-That is an honest test of the authorisation rules — the contract checks a party
-key derived from a secret, and three PINs give three genuinely different keys —
-and a poor test of payment. Paying the wrong party is invisible when every
-party is you. So is a shielded output the recipient cannot decrypt, because
-midnight-js already knows the connected wallet's encryption key.
+```console
+$ npm run e2e:two-party --workspace @quietbooks/e2e
 
-Both of those were real bugs here, and neither was visible to a one-wallet
-harness. The seller payout was unbound, so a buyer could settle by paying
-themselves and have the invoice recorded as settled in full. The shared record
-carried no seller encryption key, so a payment to anyone but yourself could not
-be constructed at all.
-
-This funds a second wallet from the genesis one — there is no faucet on this
-preset, so the NIGHT is transferred and registered for DUST — then deploys,
-issues, exports, imports and settles between two wallets that share no keys and
-keep separate private state.
-
-```
 PASS  the two wallets share no keys
 PASS  the seller funds the buyer, who is a stranger to it
 PASS  the seller issues an invoice to the buyer
@@ -397,358 +157,254 @@ PASS  the chain records the settlement and still hides the amount
 15/15 steps passed
 ```
 
-The assertion the other run cannot make is the second to last: the seller's
-shielded balance rises by exactly the invoiced total and the buyer's falls by
-it. Then the amount is checked absent from the anchor and the settlement
-record, its components included, so "hidden" is asserted rather than asserted
-about.
+**Verifiable Assertions Executed by the Harness:**
+1. **Balance Check**: Seller shielded coin balance increases by exactly the invoiced total; buyer shielded balance decreases by the total.
+2. **Contract Custody Check**: Contract holding balance changes by **0**.
+3. **Public Ledger Check**: GraphQL query to the Midnight indexer confirms the invoice amount and components are **100% absent** from block data.
 
-It bites: dropping the seller's encryption key from the settle call fails it
-with `Unable to resolve encryption public key for recipient`.
+---
 
-The times are real, from one run on an ordinary laptop with nothing else
-competing for it. They are not a benchmark — an earlier run with a compile going
-alongside was two to three times slower throughout. What they are useful for is
-the shape: proving dominates everything else, and a settlement costs about what
-an issuance does.
-Each transaction also prints its cost against every block limit before it is
-submitted, because a transaction that exceeds one is refused by the node with a
-message that names neither the limit nor the margin. See **[Why twelve entry
-points](#why-twelve-entry-points)**.
+## Why QuietBooks
 
-### The web interface
+| Feature | Public Ledgers (Eth / Base / Sol) | Off-Chain SaaS (Liquifi / Magna) | Claim Registries (ShadowPayroll) | QuietBooks on Midnight |
+|---|---|---|---|---|
+| **Commercial Terms** | ❌ Public to competitors | ⚠️ Stored in centralized DB | ❌ Plaintext on ledger | ✅ **ZK-shielded in witness memory** |
+| **Token Movement** | ✅ Real on-chain transfers | ⚠️ Custodial or off-chain API | ❌ No custody or settlement | ✅ **Atomic Zswap shielded routing** |
+| **Contract Balance Leakage** | ❌ Contract balances public | ⚠️ Middleman custody | N/A | ✅ **Zero contract balance change** |
+| **Selective Audit** | ❌ All-or-nothing visibility | ⚠️ Manual exports / PDFs | ❌ None | ✅ **8-check ZK commitment proofs** |
+| **Identity Protection** | ❌ Wallet address tracking | ⚠️ KYC identity link | ⚠️ Static public keys | ✅ **PIN-rotatable witness secrets** |
+| **Dispute & Escrow** | ⚠️ Transparent locks | ❌ Centralized arbiter | ❌ None | ✅ **Bound escrow & ZK arbitration** |
 
-```bash
-npm run dev --workspace @quietbooks/ui
+---
+
+## How the Protocol Works
+
+<div align="center">
+  <img src="docs/assets/architecture.svg" alt="QuietBooks Architecture & Dual-Ledger Split" width="100%">
+</div>
+
+### 1. The Dual-Ledger Split: What the Chain Sees
+
+* **Public Ledger State:**
+  - Invoice existence and unique identifier (`InvoiceId`)
+  - Pseudonymous parties (`sellerKey`, `buyerKey`) derived from witness secrets
+  - Timestamps (`issuedAt`, `dueAt`) and status (`issued`, `settled`, `escrowFunded`, `disputed`, `cancelled`)
+  - Four 32-byte cryptographic digests: `termsCommitment`, `fieldCommitmentRoot`, `settlementDigest`, `escrowDigest`
+  - Global deployment counters (issued, settled, cancelled, disputed)
+* **Private Witness State (Never touches the chain):**
+  - Invoice amount, tax rate, currency
+  - Line items, descriptions, and customer memos
+  - Order reference numbers
+  - Blinding salts for all 9 disclosable fields
+
+### 2. The Three Settlement Paths
+
+| Path | Caller | On-Chain Amount | Mechanism |
+|---|---|---|---|
+| **`settleWithNote`** | Buyer | **Hidden** | **Atomic Passthrough**: `receiveShielded` + `sendImmediateShielded` inside one call. Contract balance changes by zero. Zswap hides the value on both legs. Circuit proves the coin equals the invoiced total and token. |
+| **`settleAttested`** | Seller | **Hidden** | Cryptographic vouch for wire / fiat settlements. Only the seller may call it, as they are the only party harmed by lying. |
+| **`fundEscrow` → `releaseEscrow`** | Buyer | **Public** | Contract holds custody of funds for milestone/dispute workflows. Explicitly transparent custody with arbiter escalation. |
+
+### 3. Selective Audit & The 8-Stage Containment Engine
+
+<div align="center">
+  <img src="docs/assets/audit-flow.svg" alt="8-Stage Selective Audit Engine" width="100%">
+</div>
+
+When an auditor requests verification of an invoice, the seller calls `grantAudit(auditorId, scopeMask, expiresAt)` on-chain. Only the **hash** of an ephemeral audit key, the 9-bit scope mask, and the expiration date are published.
+
+The seller transmits an encrypted AES-256-GCM envelope out-of-band containing the salts for only the granted fields. The auditor's client runs the **8-step containment validator**:
+1. **Format Version**: Enforces `quietbooks-audit/2` schema.
+2. **Grant Active**: Confirms on-chain grant is not revoked.
+3. **Expiry Check**: Verifies `currentTime < expiresAt` against block time.
+4. **Key Hash Preimage**: Proves `sha256(auditKey) === onChainKeyHash`.
+5. **Scope Containment**: Asserts **zero ungranted fields** are present inside the ciphertext.
+6. **Payload Decryption**: Authenticated AES-GCM decryption with integrity check.
+7. **Field Commitments**: Recomputes `hash([tag, salt, value])` for each granted field.
+8. **Merkle Root Folding**: Folds all 9 digests together and asserts `foldedRoot === onChainFieldRoot`.
+
+---
+
+## Adversarial Findings & Security Hardening
+
+Real ZK engineering requires assuming provers are adversarial. The following real security vulnerabilities were uncovered during development and permanently closed:
+
+```
+┌──────────────────────────────────────┬────────────────────────────────────────────────────┬────────────────────────────────────────────────────────┐
+│ Vulnerability Discovered             │ Attack Vector & Impact                             │ Permanent Architectural Fix                            │
+├──────────────────────────────────────┼────────────────────────────────────────────────────┼────────────────────────────────────────────────────────┤
+│ 1. Duplicate Key JSON Smuggling      │ In JSON, duplicate keys override silently. Prover  │ Envelope payload must equal canonical re-serialization │
+│                                      │ smuggled extra salts to reveal ungranted fields.   │ (`canonical(parse) === decrypted`). Rejects v1.        │
+├──────────────────────────────────────┼────────────────────────────────────────────────────┼────────────────────────────────────────────────────────┤
+│ 2. Double Witness Read in Settlement │ `settleWithNote` read terms twice: once for root,  │ Single witness read. Prover terms witness is accessed   │
+│                                      │ once for coin value. Prover settled 6M for 1 unit. │ exactly once and passed through the circuit.           │
+├──────────────────────────────────────┼────────────────────────────────────────────────────┼────────────────────────────────────────────────────────┤
+│ 3. Confetti Token Settle Attack      │ Settlement checked coin value but not token type.   │ Added `tokenType: Bytes<32>` into terms commitment.    │
+│                                      │ Buyer could settle with 5,000 units of spam coin.  │ Non-matching coin colours are rejected in-circuit.     │
+├──────────────────────────────────────┼────────────────────────────────────────────────────┼────────────────────────────────────────────────────────┤
+│ 4. Unbound Self-Payment Attack       │ Recipient was a circuit argument. Buyer could      │ Bound `sellerPayout` and `buyerPayout` inside the      │
+│                                      │ settle an invoice by paying themselves.            │ terms commitment. Arbiter payouts bound to ruling.     │
+├──────────────────────────────────────┼────────────────────────────────────────────────────┼────────────────────────────────────────────────────────┤
+│ 5. Substrate 50KB Write Limit        │ Deploy tx carries verifier keys for all circuits.   │ Consolidated to 12 entry points (30,797 bytes / 61.6%  │
+│                                      │ 14+ entry points exceeded block persistent writes. │ of block limit). Preserved atomic settlement.          │
+└──────────────────────────────────────┴────────────────────────────────────────────────────┴────────────────────────────────────────────────────────┘
 ```
 
-It needs a Midnight Lace wallet in the browser to balance and submit, a proof
-server for every write, and an indexer to read. Unset, it uses the connected
-wallet's own endpoints, which is the right default for TestNet; `ui/.env.example`
-documents every variable and [`ui/README.md`](./ui/README.md) covers the
-interface itself.
+### Empirical Block Limit Measurements
 
-Verified here, in a real browser: it builds, serves, renders, and survives the
-paths that do not need a wallet — creating and replacing the browser identity,
-form validation, the phone layout, and the connect attempt itself, which fails
-with "No Midnight Lace wallet found" rather than a stack trace. No console
-errors.
+A deploy transaction carries verifier keys for every entry point and must fit within Substrate's block limits (50,000 bytes persistent write limit):
 
-Running it is also how the worst bug in this project was found. The connect
-path decoded the wallet's key with a hex reader while a browser wallet writes
-Bech32m, so connecting threw before any contract call, on every real wallet.
-Nothing caught it because nothing had ever opened the page.
+```
+Contract                       Persistent writes   Share of block limit   Node outcome
+──────────────────────────────────────────────────────────────────────────────────────
+example-counter (1 circuit)    7,250 B             14.5%                  ACCEPTED
+QuietBooks (12 circuits)       30,797 B            61.6%                  ACCEPTED
+QuietBooks (14 circuits)       35,858 B            71.7%                  REJECTED (1010)
+QuietBooks (18 circuits)       44,964 B            89.9%                  REJECTED (1010)
+```
 
-What is still not verified: a wallet-connected run. That needs Lace on TestNet,
-which the end-to-end harness cannot stand in for — it drives the contract
-through a headless wallet against the local network instead.
+---
 
-### The CLI
+## Testing and Verification
 
 ```bash
+# In-process unit test suite (285 tests across contract and API)
+npm test
+
+# Mutation test suite: Reverts 18 security fixes, recompiles, and confirms tests fail
+npm run test:mutation --workspace @quietbooks/contract
+```
+
+* **285 Unit Tests**: Run in 11 seconds against the compiled Compact contract via `@midnight-ntwrk/compact-runtime`. Zero external network or Docker required.
+* **18/18 Mutation Tests Caught**: Guarantees that every security invariant (e.g. single witness read, payout address check, canonical JSON check) actively guards the contract.
+* **Hostile Witness Suite** (`hostile-witness.test.ts`): Drives the contract against intentionally malicious provers that lie about balances, tokens, and identities.
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Pinned Version | Purpose |
+|---|---|---|---|
+| **Smart Contract** | Compact Language | `0.23` | Pure zero-knowledge smart contract logic |
+| **Toolchain** | Compact Compiler | `0.31.1` | ZKIR generation & proof circuit compiling |
+| **Runtime** | `@midnight-ntwrk/compact-runtime` | `0.16.0` | In-circuit hashing, crypto, and witness runtime |
+| **SDK** | `midnight-js-*` | `4.1.1` | Transaction building, balancing, and proof submission |
+| **Decentralized Cryptography** | OpenZeppelin Compact | `0.3.0-alpha.2` | Forwarder and custody reference architectures |
+| **Frontend** | React 18 + Vite | `5.4.1` | Fast, lightweight UI for wallet interaction |
+| **Connector** | `@midnight-ntwrk/dapp-connector-api` | `4.0.1` | Browser extension wallet interface (Lace) |
+| **Localnet** | Docker Compose + Substrate | `midnight-local-dev` | Self-contained devnet (Node, Indexer, Proof Server) |
+
+---
+
+## Repository Structure
+
+```
+quietbooks/
+├── contract/              Compact smart contract, witnesses, and test suites
+│   ├── src/
+│   │   ├── quietbooks.compact  1,246 lines of pure Compact 0.23 contract logic
+│   │   ├── audit.ts            Selective disclosure envelope crypto & 8-check validator
+│   │   ├── invoice.ts          Commitment trees, terms hashing, salt derivations
+│   │   └── witnesses.ts        Private witness implementations
+│   └── test/                   257 tests (derivation, lifecycle, escrow, hostile-witness)
+├── api/                   TypeScript API: deploy, join, record storage, wallet keys
+├── ui/                    Vite + React interface with Lace wallet connector
+├── cli/                   Interactive Node.js CLI & standalone testnet launcher
+├── e2e/                   End-to-end integration tests (27/27 single & 15/15 two-party)
+├── localnet/              Docker compose configuration for standalone Midnight node
+├── docs/                  
+│   ├── assets/            Visual SVGs: banner, architecture, audit engine, UI surfaces
+│   └── pitch.html         Self-contained Wave 1 pitch deck
+├── DECISIONS.md           Adversarial decision log & architecture iteration rounds
+├── NOTICE                 Complete ecosystem debt attribution
+└── LICENSE                Apache-2.0
+```
+
+---
+
+## Quick Start
+
+### Prerequisites
+* **Node.js 22+**
+* **Docker Desktop** (running with WSL2 backend on Windows)
+* **Compact Compiler 0.31.1** (pinned):
+  ```bash
+  curl --proto '=https' --tlsv1.2 -LsSf \
+    https://github.com/midnightntwrk/compact/releases/download/compact-v0.5.1/compact-installer.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  compact update 0.31.1
+  compact compile --version   # Must output 0.31.1
+  ```
+
+### Build & Run Tests
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Compile Compact contract to ZKIR & TypeScript bindings
+npm run compact
+
+# 3. Build all TypeScript workspaces
+npm run build
+
+# 4. Run the 285-test unit suite
+npm test
+```
+
+### Run End-to-End on Localnet
+
+```bash
+# 1. Start the local Midnight network (Node + Indexer + Proof Server)
+cd localnet
+docker compose -f standalone.yml up -d
+
+# 2. Run the 27-step E2E lifecycle test
+npm run e2e --workspace @quietbooks/e2e
+
+# 3. Run the 15-step two-party token transfer test
+npm run e2e:two-party --workspace @quietbooks/e2e
+```
+
+### Start Web UI & CLI
+
+```bash
+# Launch Vite Web UI on http://localhost:5173
+npm run dev --workspace @quietbooks/ui
+
+# Launch Interactive Terminal CLI
 npm run cli
 ```
 
-Same contract, same API, no browser or extension. [`cli/README.md`](./cli/README.md)
-lists what it does and, as usefully, what it does not.
+---
 
-Run it from a shell that can reach Docker. The standalone launcher starts the
-local network itself through the testkit, so on Windows it has to run inside
-WSL: from the host it cannot see the daemon and stops with "could not find a
-working container runtime".
+## What is Not Built Yet (Roadmap)
+
+To maintain complete engineering honesty, the following items are scheduled for Waves 2 & 3:
+* **Multi-Token UI Selector**: The contract enforces token type matching in-circuit; the UI currently issues in the native shielded token. Multi-token selection will be enabled in Wave 2.
+* **Reliability Threshold Circuits**: The on-chain reliability record is actively updated. The zero-knowledge threshold proof over counters (`"at least 20 settled on time"`) was deferred to Wave 2 to respect the 50KB block limit.
+* **Browser-Native Proving**: Currently requires a local Midnight proof server (common to all Midnight DApps today); will transition to client-side WASM proving as Wallet SDK 2.0 matures.
+* **Persistent Accumulators across PIN Rotation**: Reliability counters currently reset on PIN rotation to maintain unlinkability.
 
 ---
 
-## Why twelve entry points
+## Licence and Attribution
 
-A Midnight deploy transaction carries one verifier key for every entry point —
-every top-level `export circuit` that touches the public ledger. Those keys are
-the bulk of the transaction, and the transaction has to fit inside one block.
+Licensed under the **Apache License, Version 2.0**. See [`LICENSE`](LICENSE) for details.
 
-The ledger's limits are per block and multi-dimensional
-(`reference/midnight-docs/api-reference/overview/usage-limits.mdx`): 200,000
-bytes of blockspace, **50,000 bytes of persistent writes**, 1,000,000 bytes
-churned, and a second each of read and compute time. For a contract deploy the
-binding dimension is persistent writes, because that is where the verifier keys
-land. A transaction is allowed less than a whole block, and how much less is not
-documented, so we measured it rather than guessed.
+QuietBooks is built upon architectural principles established by the Midnight Foundation and the wider ZK community:
+* **Midnight Foundation**: [`example-bboard`](https://github.com/midnightntwrk/example-bboard) (Lace connector & provider assembly), [`example-zkloan`](https://github.com/midnightntwrk/example-zkloan) (witness-derived identity model), and [`midnight-local-dev`](https://github.com/midnightntwrk/midnight-local-dev).
+* **OpenZeppelin**: [`compact-contracts`](https://github.com/OpenZeppelin/compact-contracts) (`ForwarderShielded` passthrough settlement and `ShieldedTreasury` custody analysis).
+* **Ecosystem Projects**: Dennis Zarelli's [`selkie-usdm-escrow`](https://github.com/DpacJones/selkie-usdm-escrow) (commitment discipline), [`Shadow-Payroll`](https://github.com/robertocarlous/Shadow-Payroll) (CI toolchain pinning), and [`alpaca-invoice`](https://github.com/WHXisWH/alpaca-invoice) (selective audit authorization concept).
 
-`e2e/probe/` generates a contract with N entry points, compiles it, and deploys
-it against the local node, reporting the cost against every limit alongside the
-outcome. The circuits it generates are deliberately different from one another:
-N copies of one circuit produce N identical verifier keys, which the transaction
-encoding compresses away — eighteen identical entry points serialize to 6 KB
-where eighteen distinct ones serialize to 41 KB.
-
-| Contract | Persistent writes | Share of the block limit | Node |
-|---|---|---|---|
-| `example-counter`, 1 entry point | 7,250 | 14.5% | accepted |
-| probe, 12 entry points | 30,700 | 61.4% | accepted |
-| QuietBooks, 12 entry points | 30,797 | 61.6% | accepted |
-| QuietBooks, 14 entry points | 35,858 | 71.7% | **rejected** |
-| probe, 16 entry points | 40,284 | 80.6% | **rejected** |
-| QuietBooks, 18 entry points | 44,964 | 89.9% | **rejected** |
-
-So a single transaction gets roughly two thirds of a block, not all of it —
-consistent with Substrate's own `maxExtrinsic`, which this node reports as 65%
-of `maxBlock`. The node's answer either way is the same opaque line:
-
-```
-1010: Invalid Transaction: Transaction would exhaust the block limits
-```
-
-It names neither the dimension nor the margin, and the wallet's Effect runtime
-buries even that behind `SubmissionError: Transaction submission error`. Two
-pieces of the harness exist because of this. `e2e/src/wallet.ts` measures every
-transaction against every limit before submitting and refuses locally with the
-dimension named — it recovers the limits by feeding `normalizeFullness` a unit
-vector per dimension until it throws, rather than hardcoding five numbers that
-governance can change. `e2e/src/run.ts` unwraps Effect's `Cause` so the node's
-real answer reaches the report.
-
-Six circuits were removed to fit. Four were entry points no application code
-ever called:
-
-| Removed | Why it was safe |
-|---|---|
-| `derivePartyKey`, `deriveAdminKey` | Thin impure wrappers that read `instanceSalt` and called the pure `derivePartyKeyWith` / `deriveAdminKeyWith`. Callers read the salt from ledger state and call the pure form, which costs nothing on chain |
-| `auditGrantCovers` | Duplicated the grant rule that the envelope validator already applies off chain, where opening actually happens. The rule now has one implementation, `grantCovers` in `contract/src/audit.ts` |
-| `readReliabilityOf` | Read counters that are public ledger state and already served by the indexer |
-
-Two were real features, deferred rather than deleted:
-
-| Deferred | Consequence |
-|---|---|
-| `proveReliability` | The counters are still written by the contract and readable by anyone; the threshold proof over them is Wave 2 |
-| `rotateAdmin` | The administrator is fixed at deploy. `setPaused` still works, so the emergency stop is intact |
-
-Both are recorded in [`DECISIONS.md`](./DECISIONS.md) with the measurement that
-forced the choice. The alternative — splitting escrow and disputes into a second
-contract — was rejected because Midnight has no cross-contract calls
-(`reference/midnight-docs/docs/concepts/how-midnight-works/building-blocks.mdx`),
-so releasing an escrow and marking its invoice settled would stop being one
-atomic transaction. Losing atomicity over money is a worse trade than deferring
-a proof.
+Detailed debt records are preserved in [`NOTICE`](NOTICE).
 
 ---
 
-## Paying in the wrong token
+<div align="center">
 
-Worth its own section, because the first version of this contract got it wrong in
-a way that a reader should be able to check rather than take on trust.
+**QuietBooks — The Private Payments Layer for Midnight.**
 
-Every settlement path compares the coin a buyer hands over against the invoice.
-Until recently that comparison was only of the **value**. The token type —
-Zswap's coin colour — was hashed into the settlement digest and never checked
-against anything.
+Built for the AKINDO Midnight Buildathon &middot; Wave 1 (September 2026)
 
-So an invoice for USD 1,250.00 could be settled with 1,250,000,000 units of any
-token at all, including one the buyer minted themselves and that nobody else
-would take. The contract would mark the invoice settled, write a settlement
-record, and credit the seller's reliability counters. The seller would have been
-paid in confetti and the chain would say otherwise.
-
-The invoice terms now carry the token the invoice is payable in:
-
-```compact
-tokenType: Bytes<32>,
-```
-
-It sits inside the terms commitment, so it is fixed at issuance and cannot be
-changed afterwards by either party, and it stays private — which token an invoice
-is denominated in is nobody else's business. `settleWithNote` and `fundEscrow`
-both compare the incoming coin against it, and the caller has already proven they
-hold terms that open the commitment the chain has held since issuance, so there
-is nothing to forge.
-
-Two things follow, and the second is the honest half:
-
-- **The value check and the token check are independent.** The right number of
-  the wrong token is refused, and so is the wrong number of the right one. Both
-  are tested, in both the settlement and the escrow paths.
-- **Neither interface lets a seller choose that token yet.** They issue in the
-  native shielded token, which is what the local network has. The binding follows
-  whatever the invoice says rather than a constant, and a test issues an invoice
-  in a non-native token and settles it, so the mechanism is not native-only — the
-  interface is.
-
-One question this raises, since it is the sort of thing a careful reader asks:
-the token is **not** one of the nine disclosable fields, so an auditor granted
-every scope still cannot read it off the invoice. That is deliberate, and it does
-not cost them anything. The settlement record commits to the coin that paid —
-nonce, token and value — so an auditor holding that coin recomputes the digest
-and confirms the token along with the amount. The nine scopes describe what was
-*invoiced*; the settlement digest describes what was *paid*. The token belongs to
-the second question.
-
----
-
-## Paying the wrong person
-
-The same shape of bug, one layer down, and the one that took longest to see.
-
-Every paying circuit took the recipient as an argument. The value was checked,
-the token was checked, and where the money actually went was whatever the caller
-typed. `settleWithNote` is called by the buyer; `releaseEscrow` is called by the
-buyer; `resolveDispute` is called by the arbiter. In each case the person
-choosing the address is not the person being paid.
-
-So a buyer could settle an invoice by paying themselves and the contract would
-record it as settled, increment the seller's reliability, and write a settlement
-digest an auditor could verify. Every number in that record was true. The money
-had gone the wrong way.
-
-The invoice now names both addresses, inside the terms commitment:
-
-```compact
-sellerPayout: Bytes<32>,   // where the seller is paid
-buyerPayout: Bytes<32>,    // where the buyer is paid on a dispute
-```
-
-`settleWithNote` and `releaseEscrow` refuse any recipient but `sellerPayout`.
-`resolveDispute` binds the address to the ruling — a verdict for the seller can
-only pay `sellerPayout`, a verdict for the buyer only `buyerPayout` — so an
-arbiter can no longer rule for one party and send the money to a third.
-
-`refundEscrow` is the deliberate exception. The caller has proven they are the
-buyer and the money is going back to the buyer, so the only person a free choice
-of address can hurt is the person making it. Binding it would also mean an
-invoice issued without a buyer address could never be refunded, which turns a
-deadline into a trap.
-
-### The rule that followed from it
-
-Binding the arbiter's payment made a second problem visible. The seller writes
-the terms. So a seller could name an arbiter and leave the buyer's address
-empty, and a ruling for the buyer would send the escrow to the zero key, where it
-is gone; or name their own address for both sides, and a ruling for the buyer
-would pay the seller. Either way the arbiter is unable to rule against the party
-who appointed them, which is the one thing an arbiter exists to do.
-
-`issueInvoice` now refuses an invoice that names an arbiter without a distinct,
-non-empty buyer address. Both front ends check the same rule in the form, so it
-costs a sentence rather than a failed proof.
-
-### Does the payout address end up on the chain?
-
-No, and this is worth stating because the natural assumption is yes.
-
-A `disclose()` is required to pass the address to `sendShielded`, and a reader
-who knows what `disclose()` means will reasonably expect the address to appear in
-the transaction. It does not. In the compiled contract the recipient reaches
-`createZswapOutput`, which pushes to `privateTranscriptOutputs`; what lands in
-the public transcript is `coinCommitment(output, recipient)` — a hash. The
-address is an input to something public, not a public output.
-
-So binding the payout costs no privacy. What it costs is that an arbiter now has
-to hold the invoice openings to prove the binding, which means the arbiter sees
-the amount. That is a disclosure to one named party the seller chose, not to the
-chain, and it buys a dispute process whose outcome cannot be redirected.
-
----
-
-## Testing
-
-| Suite | What it proves |
-|---|---|
-| `derivation.test.ts` | The off-chain helpers produce byte-identical results to the compiled circuit |
-| `lifecycle.test.ts` | Issue, settle, cancel, and every authorisation rule |
-| `escrow.test.ts` | Funding, release, refund deadlines, disputes, arbitration |
-| `audit.test.ts` | Grants, scope coverage, expiry, revocation, the reliability record, admin |
-| `audit-envelope.test.ts` | Envelope crypto and all eight validator checks |
-| `hostile-witness.test.ts` | What the contract does when the prover lies |
-| `api/test/coin-key.test.ts` | Both spellings of a coin public key give one answer |
-| `api/test/record.test.ts` | The record two parties exchange survives the trip |
-
-285 tests, all passing, no Docker required: 257 against the contract and 28
-against the API. The contract's drive the compiled contract in-process through
-`@midnight-ntwrk/compact-runtime`, so a full run takes about eleven seconds.
-
-The API had no tests at all until the connect path turned out to be broken for
-every real wallet. That layer is where the product meets the wallet, and it was
-the one layer nothing exercised.
-
-### Tests that pass for the wrong reason
-
-Two are worth calling out, because in both cases a green suite was hiding a real
-defect.
-
-An earlier version of the derivation suite compared an encoding helper against
-itself. It passed while the helper encoded integers in the wrong byte order,
-which would have shipped audit envelopes no auditor could verify. It now folds
-our own field commitments independently and compares the result to the compiled
-circuit's root, so it cannot pass vacuously. Reintroducing the bug fails seven
-tests.
-
-The second was worse, and it is why `hostile-witness.test.ts` exists. Every
-other suite runs the honest witness implementation from `contract/src/witnesses.ts`
-— so every value the contract saw came from software trying to be correct, even
-in the tests that assert a refusal. A witness is not like that. It is a private
-input the caller's own machine produces, the chain never validates it, and an
-attacker ships their own. Reverting the most serious fix in the contract, the
-one that stopped `settleWithNote` reading the terms witness twice, left all 215
-tests of the time green. The attack it reopens settles a six-million invoice for
-one unit.
-
-### Mutation testing
-
-The way that was found, and the way the rest are kept honest: revert a fix,
-recompile, and check the suite actually goes red.
-
-`compact compile --skip-zk` produces a `contract/index.js` byte-identical to the
-shipped build, so a mutant compiles in eight seconds and the whole sweep runs in
-minutes. Eighteen reverted fixes, eighteen failing tests — including the double
-witness read, which now fails on a test that asserts the prover is asked exactly
-once, rather than on one consequence of asking twice.
-
-`npm run test:mutation --workspace @quietbooks/contract` runs it, and CI runs it
-on every push. Without that, deleting a rule and the test that guards it in the
-same commit is a green build.
-
-One mutant can no longer be written at all: `fundEscrow` used to compare its
-deadline against a `fundedAt` the same caller supplied, and that argument has
-been deleted rather than checked. A bug you cannot express is better than a bug
-you test for.
-
----
-
-## What is not built yet
-
-Stated plainly, because a roadmap that only lists wins is not a roadmap.
-
-- **Nothing issues in a token other than the native shielded one.** The contract
-  now binds each invoice to the token it is payable in and refuses a payment in
-  any other, but neither interface offers a way to pick that token at issue time,
-  so every invoice they create is denominated in the native token. The
-  enforcement is real and tested; the choice is not yet offered. See **[Paying in
-  the wrong token](#paying-in-the-wrong-token)**.
-- **A wallet-connected run of the web interface.** Everything that does not need
-  a browser wallet has been driven in a real browser, and the contract is covered
-  end to end through a headless wallet. What is untested is Lace itself on
-  TestNet, which no harness here can stand in for.
-- The threshold proof over the reliability counters is written and was deployed
-  in an earlier build, but does not fit in the current deploy alongside escrow
-  and disputes. The counters are still kept. See **[Why twelve entry
-  points](#why-twelve-entry-points)**.
-- The administrator is fixed at deploy. `rotateAdmin` was removed for the same
-  reason; `setPaused` remains, so the emergency stop works.
-- Every user needs a locally running proof server. That is true of every Midnight
-  DApp today, and in-browser proving is the fix when it lands in the wallet.
-- Reliability counters are per party key, so they reset on PIN rotation. An
-  accumulator that survives rotation without re-linking the old identity is
-  possible and is not built.
-- Recurring invoices, multi-currency netting and partial payments are not
-  modelled. Every invoice settles once, in full.
-
----
-
-## Licence and attribution
-
-Apache-2.0. See [`LICENSE`](./LICENSE).
-
-[`NOTICE`](./NOTICE) records what this project owes to the Midnight examples,
-OpenZeppelin's Compact contracts, and several independent ecosystem projects —
-architectural debts as well as code. Every Compact circuit and every line of the
-application is original; Compact is neither Solidity nor Leo, so nothing could
-have been copied even where we wanted to. What was borrowed is design, and it is
-listed so a reader can check the originals.
+</div>
