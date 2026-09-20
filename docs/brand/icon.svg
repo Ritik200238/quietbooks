@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>QuietBooks</title>
+  <!-- A Q whose tail is a redaction bar: the record is there, the terms are not. -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="28%" r="85%">
+      <stop offset="0" stop-color="#1b2433"/>
+      <stop offset="0.55" stop-color="#0e1219"/>
+      <stop offset="1" stop-color="#07090c"/>
+    </radialGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7f9fc"/>
+      <stop offset="1" stop-color="#cfd6e1"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#93b3f7"/>
+      <stop offset="1" stop-color="#4868c8"/>
+    </linearGradient>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <rect x="458" y="690" width="420" height="152" rx="44" fill="#000"/>
+    </mask>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <circle cx="474" cy="510" r="236" fill="none" stroke="url(#paper)" stroke-width="124" mask="url(#cut)"/>
+  <rect x="488" y="720" width="360" height="92" rx="24" fill="url(#blue)"/>
+</svg>
