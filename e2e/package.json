@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.build.json",
     "e2e": "npm run build && node dist/run.js",
     "e2e:two-party": "npm run build && node dist/two-party.js",
+    "wallet-bridge": "npm run build && node dist/wallet-bridge.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
