@@ -10,7 +10,8 @@
     "e2e": "npm run build && node dist/run.js",
     "e2e:two-party": "npm run build && node dist/two-party.js",
     "wallet-bridge": "npm run build && node dist/wallet-bridge.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "preview:fund": "npm run build && node dist/preview-fund.js"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-runtime": "0.16.0",
