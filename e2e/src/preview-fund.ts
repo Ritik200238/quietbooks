@@ -25,7 +25,7 @@ import * as Rx from 'rxjs';
 
 import { nativeToken } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
-import { FaucetClient, type EnvironmentConfiguration } from '@midnight-ntwrk/testkit-js';
+import type { EnvironmentConfiguration } from '@midnight-ntwrk/testkit-js';
 import {
   ShieldedAddress,
   UnshieldedAddress,
@@ -58,6 +58,9 @@ const NETWORKS: Record<NetworkName, EnvironmentConfiguration> = {
     proofServer: process.env.QB_PROOF_SERVER ?? 'http://127.0.0.1:6300',
   },
 };
+
+/** What to ask the faucet for, as the decimal string its API expects. */
+const FAUCET_AMOUNT = '1000';
 
 const logger = pino({
   level: process.env.QB_LOG_LEVEL ?? 'info',
@@ -110,6 +113,58 @@ const resolveSeed = (): { seed: string; source: string } => {
   return { seed, source: `${resolved} (new)` };
 };
 
+/**
+ * Ask the faucet for NIGHT, and report truthfully whether it agreed.
+ *
+ * `FaucetClient` from testkit-js cannot be used here. It POSTs to the faucet's
+ * base URL, which serves the single-page app: the request comes back as
+ * `200 OK` with an HTML body, the client reads the status and logs a success,
+ * and no drip is ever created. The run then waits forever for money nobody
+ * sent. The real API is `POST <base>/api/drips`, taking the amount as a decimal
+ * string and the captcha token as a header.
+ *
+ * The captcha is enforced. A request carrying the placeholder token testkit
+ * sends is answered `403 {"error":"Captcha verification failed"}`, so an
+ * unattended run cannot fund itself: the faucet is deliberately gated on a
+ * human and that gate is not ours to route around. Set TURNSTILE_TOKEN to a
+ * token taken from a real browser session if you have one -- they are
+ * single-use and short-lived -- otherwise open the faucet and paste the
+ * address. Either way this returns false rather than pretending.
+ */
+const requestDrip = async (faucetBase: string, address: string): Promise<boolean> => {
+  const token = process.env.TURNSTILE_TOKEN?.trim() ?? '';
+  const url = `${faucetBase}/api/drips`;
+
+  if (token === '') {
+    logger.warn('no TURNSTILE_TOKEN set, so the faucet cannot be asked from here');
+    logger.warn(`open ${faucetBase} in a browser and send NIGHT to:`);
+    logger.warn(`  ${address}`);
+    return false;
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Captcha-Token': token },
+      body: JSON.stringify({ recipientAddress: address, amount: FAUCET_AMOUNT }),
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      logger.warn(`the faucet refused the request: ${response.status} ${body.slice(0, 200)}`);
+      logger.warn(`open ${faucetBase} in a browser and send NIGHT to:`);
+      logger.warn(`  ${address}`);
+      return false;
+    }
+    logger.info(`the faucet accepted the request: ${body.slice(0, 200)}`);
+    return true;
+  } catch (error) {
+    logger.warn(
+      `could not reach the faucet: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
+};
+
 const main = async (): Promise<void> => {
   const network = (process.env.QB_NETWORK ?? 'preview') as NetworkName;
   const env = NETWORKS[network];
@@ -131,7 +186,16 @@ const main = async (): Promise<void> => {
   logger.info(`unshielded address  ${unshieldedText}`);
   logger.info(`shielded address    ${shieldedText}`);
 
-  await waitForSync(ctx, logger);
+  // Ask before syncing, not after.
+  //
+  // A faucet needs an address and nothing else, and the unshielded sub-wallet
+  // -- the only one that address comes from -- is caught up within seconds. The
+  // shielded and dust scans are a walk over the whole chain and take far longer
+  // on a public network than on the standalone node: waiting for them first
+  // spent the sync timeout before the request was ever made, and then failed
+  // with a message about the indexer.
+  const faucet = (env.faucet ?? '').replace(/\/+$/, '');
+  const asked = await requestDrip(faucet, unshieldedText);
 
   const night = nativeToken().raw;
   const balanceNow = async (): Promise<bigint> => {
@@ -143,21 +207,11 @@ const main = async (): Promise<void> => {
 
   let balance = await balanceNow();
   if (balance === 0n) {
-    const faucet = env.faucet ?? '';
-    logger.info(`asking the ${network} faucet for NIGHT`);
-    try {
-      await new FaucetClient(faucet, logger).requestTokens(unshieldedText);
-    } catch (error) {
-      // A faucet that rate-limits, requires a human, or is simply down is not a
-      // bug in this script, and the address above is all an operator needs to
-      // fund the wallet by hand. Say which it was and keep waiting.
-      logger.warn(
-        `the faucet refused the request (${error instanceof Error ? error.message : String(error)}). ` +
-          `Fund the unshielded address above at ${faucet} and leave this running.`,
-      );
-    }
-
-    logger.info('waiting for NIGHT to arrive (Ctrl-C to stop)');
+    logger.info(
+      asked
+        ? 'waiting for the drip to land (Ctrl-C to stop)'
+        : 'waiting for NIGHT to arrive by hand (Ctrl-C to stop)',
+    );
     balance = await Rx.firstValueFrom(
       ctx.wallet.state().pipe(
         Rx.throttleTime(5_000, undefined, { leading: true, trailing: true }),
@@ -171,6 +225,14 @@ const main = async (): Promise<void> => {
   }
 
   logger.info(`NIGHT balance ${balance.toString()}`);
+
+  // Registering for DUST submits a transaction, and a transaction cannot be
+  // balanced until all three sub-wallets have caught up. The default five
+  // minutes is sized for the standalone node; a first scan of a public chain
+  // takes considerably longer, so the wait is widened rather than retried.
+  const SYNC_TIMEOUT_MS = 1_800_000;
+  logger.info('waiting for the shielded and dust scans to finish');
+  await waitForSync(ctx, logger, SYNC_TIMEOUT_MS);
 
   // Fees are paid in DUST, which only registered NIGHT generates. A wallet that
   // holds NIGHT and has not registered it looks funded and cannot submit.
