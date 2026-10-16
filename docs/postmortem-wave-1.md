@@ -1,6 +1,7 @@
-# Wave 2 postmortem
+# Wave 1 postmortem
 
-Written 2026-10-16, after Wave 2 closed on 2026-10-17 with QuietBooks unplaced.
+Written 2026-10-16. Wave 1 closed on 2026-09-16 and QuietBooks was unplaced; Wave 2 closes
+2026-10-17 and Wave 3 on 2026-11-16 (`DECISIONS.md:165`).
 
 This document answers one question: a judge had roughly twenty minutes per entry, and in those
 twenty minutes QuietBooks lost to [PollPower](https://github.com/PollPower/contracts). Why.
@@ -178,7 +179,7 @@ rather than earning it.
 
 ---
 
-## 6. What changes for Wave 3
+## 6. What changes next
 
 Priority order, highest first. Nothing below the line starts before the thing above it is finished.
 

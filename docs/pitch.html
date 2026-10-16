@@ -372,6 +372,38 @@
 
   .note { font-size: 0.85rem; color: var(--ink-3); max-width: var(--measure); }
 
+  /* Screenshots.
+
+     Every image in this deck is a capture of the running interface against a
+     real Midnight node, not a drawing of one. An earlier version of this
+     project shipped hand-drawn SVGs captioned as screenshots; they were
+     invalid XML, the browser rendered its parse error instead, and a demo
+     video was built from the result. Nothing here is generated: if a picture
+     cannot be taken from the product, the slide does without one.
+
+     The border and the inset shadow are what stop a dark capture from bleeding
+     into a light slide, and the neutral mat behind it does the same for the one
+     capture that is a narrow portrait. */
+  .shots { display: grid; gap: 18px; }
+  .shots.three { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  figure.shot { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+  figure.shot img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--rule-strong);
+    border-radius: 7px;
+    background: var(--sunken);
+  }
+  figure.shot.tall { max-width: 420px; margin-inline: auto; }
+  figure.shot figcaption {
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: var(--ink-3);
+    max-width: var(--measure);
+  }
+  figure.shot figcaption b { color: var(--ink-2); font-weight: 600; }
+
   footer {
     text-align: center;
     font-size: 0.8rem;
@@ -479,7 +511,7 @@
   <!-- 1 -->
   <section class="slide title-slide">
     <div>
-      <div class="eyebrow">Midnight Buildathon &middot; Wave 1</div>
+      <div class="eyebrow">Midnight Buildathon &middot; Wave 2</div>
       <div class="wordmark">Quiet<em>Books</em></div>
     </div>
     <p class="lead">
@@ -553,6 +585,33 @@
   <section class="slide">
     <div class="slide-head">
       <span class="num">03</span>
+      <h2>The product, against a real node</h2>
+    </div>
+    <p class="lead">Three captures from one run: a contract deployed from the page, an
+      invoice issued for 9,841.30 NIGHT, and the buyer settling it from a second wallet.</p>
+    <div class="shots three">
+      <figure class="shot">
+        <img src="screens/02-new-invoice.png" alt="The issue form, with line items, tax and an order reference">
+        <figcaption><b>Issue.</b> Line items, tax and the order reference are typed here and
+          stay here. What leaves the browser is a commitment.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="screens/03-invoices.png" alt="The invoice list, showing status without amounts">
+        <figcaption><b>The list.</b> Every invoice on the deployment with its public status.
+          An amount appears only where this wallet holds the opening.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="screens/04-settled.png" alt="An invoice marked settled after a shielded payment">
+        <figcaption><b>Settle.</b> The buyer pays in shielded coin inside the transaction
+          that marks the invoice settled. The chain records the settlement, not the sum.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section class="slide">
+    <div class="slide-head">
+      <span class="num">04</span>
       <h2>The finding that shaped the product</h2>
     </div>
     <p class="lead">We set out to have the contract hold the money and hide the amount.
@@ -587,10 +646,10 @@
     </div>
   </section>
 
-  <!-- 5 -->
+  <!-- 6 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">04</span>
+      <span class="num">05</span>
       <h2>The version that passed every test and could never have worked</h2>
     </div>
     <p class="lead">Worth a slide, because it is the honest argument for running against a
@@ -621,10 +680,10 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 6 -->
+  <!-- 7 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">05</span>
+      <span class="num">06</span>
       <h2>The tests that passed against a prover that never lied</h2>
     </div>
     <p class="lead">The same blind spot as the last slide, one layer in. A green suite is
@@ -660,10 +719,10 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 7 -->
+  <!-- 8 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">06</span>
+      <span class="num">07</span>
       <h2>Three ways to settle, and what each one costs you</h2>
     </div>
     <div class="table-wrap">
@@ -702,10 +761,10 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 8 -->
+  <!-- 9 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">07</span>
+      <span class="num">08</span>
       <h2>Selective audit, checked eight ways</h2>
     </div>
     <p>The seller grants one auditor specific fields of one invoice until a chosen date.
@@ -745,10 +804,38 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 9 -->
+  <!-- 10 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">08</span>
+      <span class="num">09</span>
+      <h2>What the auditor actually sees</h2>
+    </div>
+    <p class="lead">The validator's own output, run in the browser against an envelope the
+      seller sent and a key sent separately. Eight checks, then the three fields the grant
+      covered.</p>
+    <div class="cols">
+      <figure class="shot tall">
+        <img src="screens/05-audit.png" alt="The audit validator showing eight passing checks and three disclosed fields">
+        <figcaption>Capture from the running interface. The grant covered amount, tax and
+          currency; the six fields it did not cover stay sealed and are never decrypted.</figcaption>
+      </figure>
+      <div class="panel">
+        <h3>Why the values are evidence</h3>
+        <p>Each disclosed value is shown beside the commitment it opens, and that commitment
+          is one of the nine the chain has held for this invoice since the day it was issued.
+          The auditor is not reading the seller's word for what the invoice said; they are
+          reading a value that reproduces a digest nobody could change afterwards.</p>
+        <p>The panel appears only because all eight checks passed. A failure anywhere shows
+          the failing check and discloses nothing &mdash; an envelope that cannot be verified
+          is not a document worth reading.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 -->
+  <section class="slide">
+    <div class="slide-head">
+      <span class="num">10</span>
       <h2>A payment record the party cannot write themselves</h2>
     </div>
     <p class="lead">The contract keeps counts, and only counts, against each party key:
@@ -764,10 +851,10 @@ instance of the same contract in the same segment.</pre>
       visible history.</p>
   </section>
 
-  <!-- 10 -->
+  <!-- 12 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">09</span>
+      <span class="num">11</span>
       <h2>Why twelve entry points, and how we knew</h2>
     </div>
     <p class="lead">A deploy carries one verifier key per entry point and has to fit inside
@@ -807,10 +894,10 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 11 -->
+  <!-- 13 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">10</span>
+      <span class="num">12</span>
       <h2>Identity without <code>msg.sender</code></h2>
     </div>
     <div class="cols two">
@@ -831,10 +918,10 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 12 -->
+  <!-- 14 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">11</span>
+      <span class="num">13</span>
       <h2>Evidence, not adjectives</h2>
     </div>
     <div class="figures">
@@ -883,10 +970,10 @@ instance of the same contract in the same segment.</pre>
     </div>
   </section>
 
-  <!-- 13 -->
+  <!-- 15 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">12</span>
+      <span class="num">14</span>
       <h2>What is not built</h2>
     </div>
     <p class="lead">A roadmap that lists only wins is not a roadmap.</p>
@@ -900,10 +987,10 @@ instance of the same contract in the same segment.</pre>
     </ul>
   </section>
 
-  <!-- 14 -->
+  <!-- 16 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">13</span>
+      <span class="num">15</span>
       <h2>Built on the ecosystem, and says so</h2>
     </div>
     <div class="cols">
@@ -931,10 +1018,10 @@ instance of the same contract in the same segment.</pre>
       can check the originals.</p>
   </section>
 
-  <!-- 15 -->
+  <!-- 17 -->
   <section class="slide">
     <div class="slide-head">
-      <span class="num">14</span>
+      <span class="num">16</span>
       <h2>Who this is for</h2>
     </div>
     <div class="cols two">
