@@ -1,0 +1,36 @@
+# The proof server on its own, for work against a public network.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Proving always happens locally: preview and preprod supply the node and the
+# indexer, but neither will build a proof for you. `standalone.yml` brings up
+# all three services, and the node and the indexer are dead weight when the
+# chain is somewhere else -- on an 8GB machine they are the difference between
+# a deploy that finishes and one the operating system kills half way through
+# proving, which is what happened here on 2026-10-17.
+#
+#   docker compose -f localnet/proof-server-only.yml up -d
+#
+# Then point the deploy at it, which is already the default:
+#
+#   QB_PROOF_SERVER=http://127.0.0.1:6300
+#
+# Use `standalone.yml` instead when the chain itself has to be local, which is
+# what the end-to-end suite in `e2e/` needs.
+
+services:
+  proof-server:
+    container_name: 'quietbooks-proof-server'
+    restart: unless-stopped
+    image: 'midnightntwrk/proof-server:8.1.0'
+    command: ['midnight-proof-server', '-v']
+    ports:
+      - '0.0.0.0:6300:6300'
+    environment:
+      RUST_BACKTRACE: 'full'
+    healthcheck:
+      test: ['CMD-SHELL', 'echo > /dev/tcp/127.0.0.1/6300']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
