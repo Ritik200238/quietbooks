@@ -135,7 +135,7 @@ describe('issuing an invoice', () => {
       const staged = stageFor(seller.state, prepared);
       return () =>
         d.contract.impureCircuits.issueInvoice(
-          ctx(d, staged),
+          ctx(d, staged, issuedAt),
           seller.pin,
           buyerKey,
           new Uint8Array(32),
@@ -283,6 +283,18 @@ describe('settling with a bound shielded transfer', () => {
     expect(r.disputesLost).toBe(0n);
   });
 
+  it('leaves the attested counters alone, because the chain watched this one', async () => {
+    // QB-M-2. The attested counters say how much of a seller's record rests on
+    // nothing but their own word. This settlement moved a shielded coin bound to
+    // the invoice, so it is not one of them, and the subtraction a counterparty
+    // does -- total minus attested -- has to come out at the whole of it.
+    const { d, seller } = await settle();
+    const r = led(d).reliability.lookup(seller.key);
+    expect(r.settledAttested).toBe(0n);
+    expect(r.settledAttestedOnTime).toBe(0n);
+    expect(r.settled - r.settledAttested).toBe(1n);
+  });
+
   it('records a late settlement as settled but not on time', async () => {
     const { d, seller, invoiceId } = await settle({ at: draft().dueDate + DAY });
     expect(led(d).settlements.lookup(invoiceId).onTime).toBe(false);
@@ -295,17 +307,27 @@ describe('settling with a bound shielded transfer', () => {
     // The boundary the counters turn on, and one nothing exercised before. The
     // circuit asks whether the block is strictly past the due date, so a block
     // landing on the second of the deadline is punctual.
-    const { d, invoiceId } = await settle({ at: draft().dueDate, claims: draft().dueDate + DAY });
+    //
+    // The claimed date is the block's own here. Separating them cannot show
+    // anything at this particular boundary: a claim has to be at or behind its
+    // block, and every date that qualifies looks punctual too. The test below is
+    // where the two are pulled apart.
+    const { d, invoiceId } = await settle({ at: draft().dueDate });
     expect(led(d).settlements.lookup(invoiceId).onTime).toBe(true);
   });
 
   it('takes punctuality from the block, not from the timestamp the buyer supplies', async () => {
-    // The buyer settles a month late and writes yesterday's date on it. Every
-    // settlement path used to compute `onTime` from exactly that figure, so a
-    // payer could award the seller a punctuality mark -- or withhold one -- by
-    // choosing a number. The block is the one clock nobody at the keyboard owns.
-    const claims = T0 + DAY;
-    const { d, invoiceId, seller } = await settle({ at: draft().dueDate + DAY, claims });
+    // The buyer settles a minute late and writes the deadline itself on the
+    // record. Every settlement path used to compute `onTime` from exactly that
+    // figure, so a payer could award the seller a punctuality mark -- or withhold
+    // one -- by choosing a number. The block is the one clock nobody at the
+    // keyboard owns.
+    //
+    // The gap was a month until the claimed date became bounded, and it cannot
+    // be any more: a settlement dated outside `TIMESTAMP_WINDOW` of its block is
+    // refused outright, which the two tests below cover. A minute is enough.
+    const claims = draft().dueDate;
+    const { d, invoiceId, seller } = await settle({ at: draft().dueDate + 60n, claims });
 
     const settlement = led(d).settlements.lookup(invoiceId);
     expect(settlement.onTime).toBe(false);
@@ -317,13 +339,44 @@ describe('settling with a bound shielded transfer', () => {
     expect(led(d).reliability.lookup(seller.key).settledOnTime).toBe(0n);
   });
 
+  it('refuses a settlement dated after the block that carries it', async () => {
+    // QB-M-1. The claimed date was unconstrained, so a buyer could settle today
+    // and stamp the record with any year at all. `assertNearBlockTime` refuses a
+    // date the chain has not reached yet: nobody can know the time of a block
+    // that has not been produced, so claiming one is never honest.
+    //
+    // One second over, because the bound should hold at the bound and not merely
+    // somewhere beyond it.
+    const at = draft().dueDate;
+    await expect(settle({ at, claims: at + 1n })).rejects.toThrow(
+      'quietbooks: timestamp is in the future',
+    );
+  });
+
+  it('refuses a settlement further behind its block than the window allows', async () => {
+    // The other side of the same bound. Some slack is unavoidable -- the caller
+    // builds a proof and then waits for a block, and that is real time -- so the
+    // contract allows `TIMESTAMP_WINDOW` of it and nothing beyond.
+    const window = pureCircuits.TIMESTAMP_WINDOW();
+    const at = draft().dueDate;
+
+    await expect(settle({ at, claims: at - window - 1n })).rejects.toThrow(
+      'quietbooks: timestamp is too far in the past',
+    );
+
+    // And the edge itself is accepted, so the boundary is where it says it is
+    // rather than a window the tests have never actually reached.
+    const { d, invoiceId } = await settle({ at, claims: at - window });
+    expect(led(d).settlements.lookup(invoiceId).settledAt).toBe(at - window);
+  });
+
   it('refuses a second settlement of the same invoice', async () => {
     const { d, invoiceId, buyer, prepared, stored } = await settle();
     const buyerState = stageFor(share(buyer.state, stored), prepared);
     expectThrows(
       () =>
         d.contract.impureCircuits.settleWithNote(
-          ctx(d, buyerState),
+          ctx(d, buyerState, T0 + 2n * DAY),
           invoiceId,
           buyer.pin,
           coin(payableTotal(prepared.terms)),
@@ -522,7 +575,7 @@ describe('settling with a bound shielded transfer', () => {
     expectThrows(
       () =>
         issued.d.contract.impureCircuits.settleWithNote(
-          ctx(issued.d, strangerState),
+          ctx(issued.d, strangerState, T0 + DAY),
           issued.invoiceId,
           stranger.pin,
           coin(payableTotal(issued.prepared.terms)),
@@ -543,7 +596,7 @@ describe('settling with a bound shielded transfer', () => {
     expectThrows(
       () =>
         issued.d.contract.impureCircuits.settleWithNote(
-          ctx(issued.d, buyerState),
+          ctx(issued.d, buyerState, T0 + DAY),
           issued.invoiceId,
           buyer.pin + 1n,
           coin(payableTotal(issued.prepared.terms)),
@@ -572,7 +625,7 @@ describe('settling with a bound shielded transfer', () => {
     expectThrows(
       () =>
         issued.d.contract.impureCircuits.settleWithNote(
-          ctx(issued.d, buyerState),
+          ctx(issued.d, buyerState, T0 + DAY),
           issued.invoiceId,
           buyer.pin,
           coin(payableTotal(tampered.terms)),
@@ -593,7 +646,7 @@ describe('settling with a bound shielded transfer', () => {
     expectThrows(
       () =>
         issued.d.contract.impureCircuits.settleWithNote(
-          ctx(issued.d, buyerState),
+          ctx(issued.d, buyerState, T0 + DAY),
           bytes32(0xee),
           buyer.pin,
           coin(payableTotal(issued.prepared.terms)),
@@ -630,8 +683,12 @@ describe('settling by seller attestation', () => {
     // used to be theirs to choose. A seller attesting a month late could file a
     // date inside the window and award themselves the punctuality mark that
     // counterparties are asked to read.
-    const claims = T0 + DAY;
-    const { d, invoiceId, seller } = await attest({ at: draft().dueDate + DAY, claims });
+    //
+    // The seller is now a minute late rather than a month, because a month-old
+    // date is refused before it can be recorded. What is under test is which
+    // clock the counter reads, and a minute settles that either way.
+    const claims = draft().dueDate;
+    const { d, invoiceId, seller } = await attest({ at: draft().dueDate + 60n, claims });
 
     const settlement = led(d).settlements.lookup(invoiceId);
     expect(settlement.onTime).toBe(false);
@@ -643,9 +700,30 @@ describe('settling by seller attestation', () => {
   it('treats an attestation exactly on the due date as on time', async () => {
     const { d, invoiceId } = await attest({
       at: draft().dueDate,
-      claims: draft().dueDate + 10n * DAY,
+      claims: draft().dueDate,
     });
     expect(led(d).settlements.lookup(invoiceId).onTime).toBe(true);
+  });
+
+  it('is counted as attested, so a reader can discount it', async () => {
+    // QB-M-2. This path moves no value, and `issueInvoice` cannot tell whether
+    // `buyerKey` belongs to anybody, so a seller acting alone can run it as
+    // often as they will pay the fees for. Neither obvious fix survives: a
+    // buyer co-signature destroys the case the path exists for, and demanding a
+    // buyer key with history only moves the problem, because one secret yields
+    // unlimited keys. So the contract publishes which settlements rest on the
+    // seller's word and lets a counterparty price that themselves.
+    const at = draft().dueDate - DAY;
+    const { d, seller } = await attest({ at, claims: at });
+    const r = led(d).reliability.lookup(seller.key);
+
+    expect(r.settled).toBe(1n);
+    expect(r.settledOnTime).toBe(1n);
+    expect(r.settledAttested).toBe(1n);
+    expect(r.settledAttestedOnTime).toBe(1n);
+
+    // Everything this seller has to show for themselves is their own assertion.
+    expect(r.settled - r.settledAttested).toBe(0n);
   });
 
   it('lets the seller record an off-chain payment', async () => {
@@ -685,7 +763,7 @@ describe('settling by seller attestation', () => {
     expectThrows(
       () =>
         issued.d.contract.impureCircuits.settleAttested(
-          ctx(issued.d, buyerState),
+          ctx(issued.d, buyerState, T0 + DAY),
           issued.invoiceId,
           buyer.pin,
           bytes32(0x7c),
@@ -744,7 +822,7 @@ describe('cancelling', () => {
     const settled = advance(
       issued.d,
       issued.d.contract.impureCircuits.settleWithNote(
-        ctx(issued.d, buyerState),
+        ctx(issued.d, buyerState, T0 + DAY),
         issued.invoiceId,
         buyer.pin,
         coin(payableTotal(issued.prepared.terms)),
@@ -783,7 +861,7 @@ describe('cancelling', () => {
     expectThrows(
       () =>
         cancelled.contract.impureCircuits.settleWithNote(
-          ctx(cancelled, buyerState),
+          ctx(cancelled, buyerState, T0 + DAY),
           issued.invoiceId,
           buyer.pin,
           coin(payableTotal(issued.prepared.terms)),

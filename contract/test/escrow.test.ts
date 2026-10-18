@@ -335,7 +335,7 @@ describe('funding an escrow', () => {
     const settled = advance(
       open.d,
       open.d.contract.impureCircuits.settleWithNote(
-        ctx(open.d, buyerState),
+        ctx(open.d, buyerState, T0 + DAY),
         open.invoiceId,
         open.buyer.pin,
         coin(payableTotal(open.prepared.terms)),
@@ -466,11 +466,16 @@ describe('releasing an escrow', () => {
   });
 
   it('takes punctuality from the block, not from the date the buyer writes', async () => {
-    // The buyer confirms delivery a day past the due date and dates the record a
-    // month earlier. The seller's punctuality record must not follow the figure
-    // the party with an interest in it chose.
-    const claims = T0 + DAY;
-    const { d, invoiceId, seller } = await release({ at: draft().dueDate + DAY, claims });
+    // The buyer confirms delivery a minute past the due date and dates the
+    // record on the deadline itself. The seller's punctuality record must not
+    // follow the figure the party with an interest in it chose.
+    //
+    // A minute, where this test first used a month: `releaseEscrow` refuses a
+    // date the block cannot corroborate, so the gap has to fit inside
+    // `TIMESTAMP_WINDOW`. It does not need to be wide to make the point --
+    // either the counter reads the block or it reads the argument.
+    const claims = draft().dueDate;
+    const { d, invoiceId, seller } = await release({ at: draft().dueDate + 60n, claims });
 
     const settlement = led(d).settlements.lookup(invoiceId);
     expect(settlement.onTime).toBe(false);
@@ -509,7 +514,7 @@ describe('releasing an escrow', () => {
     expectThrows(
       () =>
         f.d.contract.impureCircuits.releaseEscrow(
-          ctx(f.d, sellerState),
+          ctx(f.d, sellerState, T0 + DAY),
           f.invoiceId,
           f.seller.pin,
           TO_SELLER,
@@ -526,7 +531,7 @@ describe('releasing an escrow', () => {
     expectThrows(
       () =>
         open.d.contract.impureCircuits.releaseEscrow(
-          ctx(open.d, buyerState),
+          ctx(open.d, buyerState, T0 + DAY),
           open.invoiceId,
           open.buyer.pin,
           TO_SELLER,
@@ -543,7 +548,7 @@ describe('releasing an escrow', () => {
     expectThrows(
       () =>
         d.contract.impureCircuits.releaseEscrow(
-          ctx(d, buyerState),
+          ctx(d, buyerState, T0 + 2n * DAY),
           invoiceId,
           buyer.pin,
           TO_SELLER,
@@ -591,7 +596,7 @@ describe('releasing an escrow', () => {
     expectThrows(
       () =>
         f.d.contract.impureCircuits.releaseEscrow(
-          ctx(f.d, f.buyer.state),
+          ctx(f.d, f.buyer.state, T0 + DAY),
           f.invoiceId,
           f.buyer.pin,
           TO_SELLER,
@@ -667,7 +672,7 @@ describe('refunding an escrow', () => {
     const resolved = advance(
       f.d,
       f.d.contract.impureCircuits.resolveDispute(
-        ctx(f.d, arbiterState),
+        ctx(f.d, arbiterState, T0 + DAY),
         f.invoiceId,
         f.arbiter.pin,
         true,
@@ -911,7 +916,7 @@ describe('opening a dispute', () => {
     expectThrows(
       () =>
         d.contract.impureCircuits.releaseEscrow(
-          ctx(d, buyerState),
+          ctx(d, buyerState, T0 + DAY),
           invoiceId,
           buyer.pin,
           TO_SELLER,
@@ -1044,7 +1049,7 @@ describe('resolving a dispute', () => {
     expectThrows(
       () =>
         dispute.d.contract.impureCircuits.resolveDispute(
-          ctx(dispute.d, dispute.buyer.state),
+          ctx(dispute.d, dispute.buyer.state, T0 + 2n * DAY),
           dispute.invoiceId,
           dispute.buyer.pin,
           false,
@@ -1057,7 +1062,7 @@ describe('resolving a dispute', () => {
     expectThrows(
       () =>
         dispute.d.contract.impureCircuits.resolveDispute(
-          ctx(dispute.d, dispute.seller.state),
+          ctx(dispute.d, dispute.seller.state, T0 + 2n * DAY),
           dispute.invoiceId,
           dispute.seller.pin,
           true,
@@ -1076,7 +1081,7 @@ describe('resolving a dispute', () => {
     expectThrows(
       () =>
         f.d.contract.impureCircuits.resolveDispute(
-          ctx(f.d, f.arbiter.state),
+          ctx(f.d, f.arbiter.state, T0 + 2n * DAY),
           f.invoiceId,
           f.arbiter.pin,
           true,
@@ -1093,7 +1098,7 @@ describe('resolving a dispute', () => {
     expectThrows(
       () =>
         d.contract.impureCircuits.resolveDispute(
-          ctx(d, arbiter.state),
+          ctx(d, arbiter.state, T0 + 3n * DAY),
           invoiceId,
           arbiter.pin,
           false,

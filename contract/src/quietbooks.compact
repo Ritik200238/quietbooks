@@ -129,18 +129,19 @@ export enum DisputeOutcome {
 // The public record of an invoice. Contains no commercial value of any kind:
 // every number here is either a timestamp, a status, or a 32-byte digest.
 //
-// The timestamps are the caller's claim, and the contract cannot make them
-// anything else. Compact exposes the chain's clock only as four comparisons
-// .. `blockTimeLt`, `blockTimeLte`, `blockTimeGt`, `blockTimeGte`
-// (`compact/standard-library/exports.md`) .. and no circuit that returns the
-// time, so a contract can test a date but never record one. Every date stored
-// here is therefore a label, not evidence.
+// The timestamps are the caller's claim and cannot be anything else. Compact
+// exposes the chain's clock only as four comparisons .. `blockTimeLt`,
+// `blockTimeLte`, `blockTimeGt`, `blockTimeGte` .. and no circuit that returns
+// the time, so a contract can test a date but never record one.
 //
-// What matters is that no rule reads them. Punctuality, escrow deadlines and
-// audit-grant windows are all decided by comparing against the block, and the
-// three places that once compared one caller argument to another are gone. The
-// dates stay because a reader wants to see what the parties said, and because
-// refusing to store them would not make the parties any more honest.
+// They are no longer unbounded, which is the part that mattered. Every date
+// written here goes through `assertNearBlockTime`, so it cannot be in the future
+// and cannot be more than `TIMESTAMP_WINDOW` behind the block that carries it. A
+// date on this anchor is the caller's word, accurate to the hour, and that is as
+// strong as the language allows.
+//
+// No rule reads them in any case. Punctuality, escrow deadlines and audit-grant
+// windows are all decided by comparing against the block.
 export struct InvoiceAnchor {
   status: InvoiceStatus,
   // persistentCommit(TermsFrame, termsSalt) .. binds amount, tax, currency,
@@ -195,15 +196,30 @@ export struct AuditGrant {
 // Counts only. No amounts, ever.
 //
 // The settlement, cancellation and dispute paths keep these up to date, and a
-// reader takes them from public ledger state. The circuit that proved a
-// threshold over them -- "I have settled at least N, at least M on time" --
-// without disclosing the counts is Wave 2 work: every entry point costs a
-// verifier key in the deploy transaction, and a deploy has to fit inside one
-// block's write budget. The record is accumulated now so that proof has
-// something to run against later.
+// reader takes them from public ledger state.
+//
+// `settled` counts every settlement, and one party acting alone can inflate it.
+// `settleAttested` moves no value, and `issueInvoice` cannot tell whether
+// `buyerKey` belongs to anybody, so a seller can issue to a key nobody holds and
+// attest it paid for the price of the fees. Reported against ourselves as QB-M-2
+// in `docs/audit-2026-10-16.md`. Neither obvious patch survives contact:
+// requiring the buyer to co-sign destroys the case `settleAttested` exists for,
+// and requiring `buyerKey` to have history only moves the problem, because
+// `callerKey` is a hash over a PIN the caller chooses and one secret therefore
+// yields unlimited keys.
+//
+// So the breakdown is published instead. The two attested counters say how much
+// of the total rests on nothing but the seller's word; subtract them and what
+// remains are the settlements where the chain itself watched value move. A
+// counterparty decides which number to trust, which is where that judgement
+// belongs.
 export struct Reliability {
   settled: Uint<64>,
   settledOnTime: Uint<64>,
+  // Of `settled`, those recorded by `settleAttested`: no value moved in the
+  // transaction, so they rest on the seller's assertion alone.
+  settledAttested: Uint<64>,
+  settledAttestedOnTime: Uint<64>,
   cancelled: Uint<64>,
   disputesOpened: Uint<64>,
   disputesLost: Uint<64>
@@ -288,6 +304,37 @@ export circuit SCOPE_COUNT(): Uint<8> { return 9; }
 // 3: an invoice must name where the seller is paid, and an invoice that names an
 //    arbiter must name a separate address for the buyer.
 export circuit RULES_VERSION(): Uint<8> { return 3; }
+
+// ---------------------------------------------------------------------------
+// Caller-asserted time
+// ---------------------------------------------------------------------------
+
+// How far a timestamp argument may sit from the block that carries it.
+//
+// Compact can compare against the chain's clock but cannot read it: the standard
+// library exposes four comparisons and no circuit that returns the time
+// (`compact/standard-library/exports.md:571`-`:601`). So every date this
+// contract stores is the caller's claim and always will be. Bounding that claim
+// is what is left, and it is most of what was wanted.
+//
+// One hour. Building a proof and then waiting for a block is real time, and no
+// honest caller needs more of it than that.
+export circuit TIMESTAMP_WINDOW(): Uint<64> { return 3600; }
+
+// Refuse a timestamp the block cannot corroborate.
+//
+// Without this a seller could stamp an invoice with any year and a buyer could
+// record a settlement dated before the invoice existed. Reported against
+// ourselves as QB-M-1 in `docs/audit-2026-10-16.md`.
+//
+// The window applies on the stale side only. A date in the future is refused
+// outright: a caller cannot know the time of a block that has not been produced,
+// so claiming one is never honest.
+circuit assertNearBlockTime(t: Uint<64>): [] {
+  assert(blockTimeGte(t), "quietbooks: timestamp is in the future");
+  assert(!blockTimeGt((t + TIMESTAMP_WINDOW()) as Uint<64>),
+         "quietbooks: timestamp is too far in the past");
+}
 
 // ---------------------------------------------------------------------------
 // Ledger
@@ -550,6 +597,8 @@ circuit readReliability(key: Bytes<32>): Reliability {
     return Reliability {
       settled: 0 as Uint<64>,
       settledOnTime: 0 as Uint<64>,
+      settledAttested: 0 as Uint<64>,
+      settledAttestedOnTime: 0 as Uint<64>,
       cancelled: 0 as Uint<64>,
       disputesOpened: 0 as Uint<64>,
       disputesLost: 0 as Uint<64>
@@ -558,11 +607,18 @@ circuit readReliability(key: Bytes<32>): Reliability {
   return reliability.lookup(key);
 }
 
-circuit bumpSettled(key: Bytes<32>, onTime: Boolean): [] {
+// `attested` is true only for `settleAttested`, the one path that records a
+// settlement without any value moving. It stays a required argument rather than
+// a default so that a future settlement path has to say which kind it is.
+circuit bumpSettled(key: Bytes<32>, onTime: Boolean, attested: Boolean): [] {
   const r = readReliability(key);
   reliability.insert(key, Reliability {
     settled: (r.settled + 1) as Uint<64>,
     settledOnTime: onTime ? ((r.settledOnTime + 1) as Uint<64>) : r.settledOnTime,
+    settledAttested: attested ? ((r.settledAttested + 1) as Uint<64>) : r.settledAttested,
+    settledAttestedOnTime: (attested && onTime)
+      ? ((r.settledAttestedOnTime + 1) as Uint<64>)
+      : r.settledAttestedOnTime,
     cancelled: r.cancelled,
     disputesOpened: r.disputesOpened,
     disputesLost: r.disputesLost
@@ -574,6 +630,8 @@ circuit bumpCancelled(key: Bytes<32>): [] {
   reliability.insert(key, Reliability {
     settled: r.settled,
     settledOnTime: r.settledOnTime,
+    settledAttested: r.settledAttested,
+    settledAttestedOnTime: r.settledAttestedOnTime,
     cancelled: (r.cancelled + 1) as Uint<64>,
     disputesOpened: r.disputesOpened,
     disputesLost: r.disputesLost
@@ -585,6 +643,8 @@ circuit bumpDisputeOpened(key: Bytes<32>): [] {
   reliability.insert(key, Reliability {
     settled: r.settled,
     settledOnTime: r.settledOnTime,
+    settledAttested: r.settledAttested,
+    settledAttestedOnTime: r.settledAttestedOnTime,
     cancelled: r.cancelled,
     disputesOpened: (r.disputesOpened + 1) as Uint<64>,
     disputesLost: r.disputesLost
@@ -596,6 +656,8 @@ circuit bumpDisputeLost(key: Bytes<32>): [] {
   reliability.insert(key, Reliability {
     settled: r.settled,
     settledOnTime: r.settledOnTime,
+    settledAttested: r.settledAttested,
+    settledAttestedOnTime: r.settledAttestedOnTime,
     cancelled: r.cancelled,
     disputesOpened: r.disputesOpened,
     disputesLost: (r.disputesLost + 1) as Uint<64>
@@ -639,6 +701,7 @@ export circuit issueInvoice(
     terms: invoiceTerms()
   };
 
+  assertNearBlockTime(disclose(issuedAt));
   assertTermsValid(frame, disclose(issuedAt));
 
   // An invoice with an arbiter has to be able to pay either side.
@@ -740,6 +803,7 @@ export circuit settleWithNote(
   assertNotPaused();
   const id = disclose(invoiceId);
   const at = disclose(settledAt);
+  assertNearBlockTime(at);
 
   assert(invoices.member(id), "quietbooks: unknown invoice");
   const anchor = invoices.lookup(id);
@@ -783,7 +847,7 @@ export circuit settleWithNote(
   });
 
   invoices.insert(id, withStatus(anchor, InvoiceStatus.settled, at));
-  bumpSettled(anchor.sellerKey, onTime);
+  bumpSettled(anchor.sellerKey, onTime, false);
   settledCount.increment(1);
 }
 
@@ -803,6 +867,7 @@ export circuit settleAttested(
   assertNotPaused();
   const id = disclose(invoiceId);
   const at = disclose(settledAt);
+  assertNearBlockTime(at);
 
   assert(invoices.member(id), "quietbooks: unknown invoice");
   const anchor = invoices.lookup(id);
@@ -824,7 +889,7 @@ export circuit settleAttested(
   });
 
   invoices.insert(id, withStatus(anchor, InvoiceStatus.settled, at));
-  bumpSettled(anchor.sellerKey, onTime);
+  bumpSettled(anchor.sellerKey, onTime, true);
   settledCount.increment(1);
 }
 
@@ -950,6 +1015,7 @@ export circuit releaseEscrow(
   assertNotPaused();
   const id = disclose(invoiceId);
   const at = disclose(releasedAt);
+  assertNearBlockTime(at);
 
   assert(invoices.member(id), "quietbooks: unknown invoice");
   const anchor = invoices.lookup(id);
@@ -982,7 +1048,7 @@ export circuit releaseEscrow(
   });
 
   invoices.insert(id, withStatus(anchor, InvoiceStatus.settled, at));
-  bumpSettled(anchor.sellerKey, onTime);
+  bumpSettled(anchor.sellerKey, onTime, false);
   settledCount.increment(1);
 }
 
@@ -1095,6 +1161,7 @@ export circuit resolveDispute(
   assertNotPaused();
   const id = disclose(invoiceId);
   const at = disclose(resolvedAt);
+  assertNearBlockTime(at);
 
   assert(invoices.member(id), "quietbooks: unknown invoice");
   const anchor = invoices.lookup(id);
@@ -1152,7 +1219,7 @@ export circuit resolveDispute(
       settledAt: at,
       onTime: onTime
     });
-    bumpSettled(anchor.sellerKey, onTime);
+    bumpSettled(anchor.sellerKey, onTime, false);
     settledCount.increment(1);
   }
 
@@ -1192,6 +1259,7 @@ export circuit grantAudit(
   // Against the chain's clock. Comparing two arguments the same caller chose
   // was vacuous, and `audit.ts` told readers the contract enforced this.
   assert(blockTimeLt(disclose(expiresAt)), "quietbooks: grant must expire in the future");
+  assertNearBlockTime(disclose(grantedAt));
 
   auditGrants.insert(id, AuditGrant {
     auditKeyHash: disclose(auditKeyHash),
@@ -1230,10 +1298,6 @@ export circuit revokeAudit(invoiceId: Bytes<32>, sellerPin: Uint<64>): [] {
     revoked: true
   });
 }
-
-// ---------------------------------------------------------------------------
-// Reliability proof
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Administration

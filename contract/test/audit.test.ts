@@ -72,12 +72,23 @@ const grant = (
   invoiceId: Uint8Array,
   seller: Actor,
   scopes: boolean[],
-  options: { keyHash?: Uint8Array; expiresAt?: bigint; grantedAt?: bigint } = {},
+  options: {
+    keyHash?: Uint8Array;
+    expiresAt?: bigint;
+    grantedAt?: bigint;
+    /**
+     * The block the grant lands in, when a test needs it away from `grantedAt`.
+     *
+     * `grantAudit` refuses a grant date the block cannot corroborate, so the two
+     * agree unless a test is specifically about them disagreeing.
+     */
+    time?: bigint;
+  } = {},
 ): Deployed =>
   advance(
     d,
     d.contract.impureCircuits.grantAudit(
-      ctx(d, seller.state),
+      ctx(d, seller.state, options.time ?? options.grantedAt ?? T0),
       invoiceId,
       seller.pin,
       options.keyHash ?? AUDIT_KEY,
@@ -203,16 +214,22 @@ describe('granting an auditor sight of an invoice', () => {
   it('refuses a window already past, even when it opens after the claimed grant time', async () => {
     const { d, invoiceId, seller } = await anInvoice();
 
-    // `expiresAt > grantedAt` by a fortnight, which is all the old rule asked
+    // `expiresAt` is later than `grantedAt`, which is all the old rule asked
     // for, and both are behind the block. Two arguments the same caller chose
     // cannot establish that a window is open; only the chain's clock can. The
     // off-chain validator was meanwhile telling readers the contract enforced
     // this, so a grant expired on arrival looked live to anyone reading the code.
+    //
+    // Both dates sit inside `TIMESTAMP_WINDOW` of the block, so the grant date
+    // is itself acceptable and the expiry rule is the only thing left that can
+    // refuse this. Pushing them a fortnight back, as this test first did, now
+    // trips the staleness check instead and says nothing about the window.
     expectThrows(
       () =>
         grant(d, invoiceId, seller, allScopes(), {
-          expiresAt: T0 - 14n * DAY,
-          grantedAt: T0 - 28n * DAY,
+          time: T0,
+          grantedAt: T0 - 3000n,
+          expiresAt: T0 - 1000n,
         }),
       'grant must expire in the future',
     );
@@ -450,7 +467,7 @@ describe('the reliability record', () => {
     const d = advance(
       disputed,
       disputed.contract.impureCircuits.resolveDispute(
-        ctx(disputed, arbiterState),
+        ctx(disputed, arbiterState, T0 + DAY),
         issued.invoiceId,
         arbiter.pin,
         false,

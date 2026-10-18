@@ -98,7 +98,7 @@ describe('a prover that changes its story mid-circuit', () => {
     expectThrows(
       () =>
         withProver(open.d, forge.witnesses).contract.impureCircuits.settleWithNote(
-          ctx(open.d, open.buyerState),
+          ctx(open.d, open.buyerState, T0 + DAY),
           open.invoiceId,
           open.buyer.pin,
           coin(1n),
@@ -130,7 +130,7 @@ describe('a prover that changes its story mid-circuit', () => {
       run: async (forge: ReturnType<typeof lyingTerms>) => {
         const open = await openInvoice();
         withProver(open.d, forge.witnesses).contract.impureCircuits.settleWithNote(
-          ctx(open.d, open.buyerState),
+          ctx(open.d, open.buyerState, T0 + DAY),
           open.invoiceId,
           open.buyer.pin,
           coin(total(open.prepared)),
@@ -145,7 +145,7 @@ describe('a prover that changes its story mid-circuit', () => {
         const open = await openInvoice();
         const sellerState = stageFor(open.seller.state, open.prepared);
         withProver(open.d, forge.witnesses).contract.impureCircuits.settleAttested(
-          ctx(open.d, sellerState),
+          ctx(open.d, sellerState, T0 + DAY),
           open.invoiceId,
           open.seller.pin,
           bytes32(0x5e),
@@ -181,7 +181,7 @@ describe('a prover that changes its story mid-circuit', () => {
           ),
         );
         withProver(funded, forge.witnesses).contract.impureCircuits.releaseEscrow(
-          ctx(funded, open.buyerState),
+          ctx(funded, open.buyerState, T0 + DAY),
           open.invoiceId,
           open.buyer.pin,
           payoutTo(SELLER_PAYOUT),
@@ -216,7 +216,7 @@ describe('a prover that changes its story mid-circuit', () => {
         // arbiter sees the amount.
         const arbiterState = stageFor(share(open.arbiter.state, open.stored), open.prepared);
         withProver(disputed, forge.witnesses).contract.impureCircuits.resolveDispute(
-          ctx(disputed, arbiterState),
+          ctx(disputed, arbiterState, T0 + DAY),
           open.invoiceId,
           open.arbiter.pin,
           true,
@@ -251,7 +251,7 @@ describe('a prover that changes its story mid-circuit', () => {
     expectThrows(
       () =>
         withProver(open.d, forge.witnesses).contract.impureCircuits.settleWithNote(
-          ctx(open.d, open.buyerState),
+          ctx(open.d, open.buyerState, T0 + DAY),
           open.invoiceId,
           open.buyer.pin,
           coin(1n),
@@ -281,7 +281,7 @@ describe('a prover that rewrites the parts of the terms nobody looks at', () => 
     expectThrows(
       () =>
         withProver(open.d, forge.witnesses).contract.impureCircuits.settleWithNote(
-          ctx(open.d, open.buyerState),
+          ctx(open.d, open.buyerState, T0 + DAY),
           open.invoiceId,
           open.buyer.pin,
           coin(total(open.prepared)),
@@ -301,7 +301,7 @@ describe('a prover that rewrites the parts of the terms nobody looks at', () => 
     expectThrows(
       () =>
         withProver(open.d, forge.witnesses).contract.impureCircuits.settleWithNote(
-          ctx(open.d, open.buyerState),
+          ctx(open.d, open.buyerState, T0 + DAY),
           open.invoiceId,
           open.buyer.pin,
           coin(total(open.prepared), cheapToken),
@@ -453,18 +453,23 @@ describe('the reliability a dispute writes', () => {
     );
 
     const arbiterState = stageFor(share(open.arbiter.state, open.stored), open.prepared);
-    const late = draft().dueDate + 10n * DAY;
+    const late = draft().dueDate + 60n;
     const resolved = advance(
       disputed,
       disputed.contract.impureCircuits.resolveDispute(
-        // The block is ten days past the due date. The arbiter dates the ruling
-        // a day inside it.
+        // The block is a minute past the due date. The arbiter dates the ruling
+        // on the deadline itself, which is inside it.
+        //
+        // A minute rather than the ten days this test first used: a ruling dated
+        // outside `TIMESTAMP_WINDOW` of its block is refused now, and the
+        // lifecycle suite is where that bound is tested. The width of the gap
+        // was never what this test was about.
         ctx(disputed, arbiterState, late),
         open.invoiceId,
         open.arbiter.pin,
         true,
         payoutTo(SELLER_PAYOUT),
-        draft().dueDate - DAY,
+        draft().dueDate,
       ),
     );
 
@@ -473,7 +478,7 @@ describe('the reliability a dispute writes', () => {
     expect(settlement.onTime).toBe(false);
     // The date the arbiter typed is still recorded, because a reader wants to
     // see what was claimed. It just decides nothing.
-    expect(settlement.settledAt).toBe(draft().dueDate - DAY);
+    expect(settlement.settledAt).toBe(draft().dueDate);
 
     const record = l.reliability.lookup(open.seller.key);
     expect(record.settled).toBe(1n);
@@ -509,9 +514,15 @@ describe('the reliability a dispute writes', () => {
         open.arbiter.pin,
         true,
         payoutTo(SELLER_PAYOUT),
-        // Dated late by the arbiter, settled early by the block. The mirror of
-        // the test above: the counter follows the chain in both directions.
-        draft().dueDate + 10n * DAY,
+        // Settled a day early by the block, and dated as late as the arbiter is
+        // able to date it, which is the block itself.
+        //
+        // The mirror this test used to draw -- dated late, settled early -- can
+        // no longer be built. A claim has to be at or behind its own block, so
+        // no caller can date a ruling forward at all, which is the whole of
+        // QB-M-1. What remains testable, and what matters here, is that an early
+        // resolution is credited as on time.
+        draft().dueDate - DAY,
       ),
     );
 
