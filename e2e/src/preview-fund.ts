@@ -25,39 +25,16 @@ import * as Rx from 'rxjs';
 
 import { nativeToken } from '@midnight-ntwrk/midnight-js-protocol/ledger';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
-import type { EnvironmentConfiguration } from '@midnight-ntwrk/testkit-js';
 import {
   ShieldedAddress,
   UnshieldedAddress,
 } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { configureNetwork } from '@quietbooks/api';
 
+import { environmentFor, selectedNetwork } from './public-network.js';
+
 import { addressesOf, buildWallet, registerForDust, waitForSync } from './wallet.js';
 
-type NetworkName = 'preview' | 'preprod';
-
-const NETWORKS: Record<NetworkName, EnvironmentConfiguration> = {
-  preview: {
-    walletNetworkId: 'preview',
-    networkId: 'preview',
-    indexer: 'https://indexer.preview.midnight.network/api/v4/graphql',
-    indexerWS: 'wss://indexer.preview.midnight.network/api/v4/graphql/ws',
-    node: 'https://rpc.preview.midnight.network',
-    nodeWS: 'wss://rpc.preview.midnight.network',
-    faucet: 'https://midnight-tmnight-preview.nethermind.dev/',
-    proofServer: process.env.QB_PROOF_SERVER ?? 'http://127.0.0.1:6300',
-  },
-  preprod: {
-    walletNetworkId: 'preprod',
-    networkId: 'preprod',
-    indexer: 'https://indexer.preprod.midnight.network/api/v4/graphql',
-    indexerWS: 'wss://indexer.preprod.midnight.network/api/v4/graphql/ws',
-    node: 'https://rpc.preprod.midnight.network',
-    nodeWS: 'wss://rpc.preprod.midnight.network',
-    faucet: 'https://midnight-tmnight-preprod.nethermind.dev/',
-    proofServer: process.env.QB_PROOF_SERVER ?? 'http://127.0.0.1:6300',
-  },
-};
 
 /** What to ask the faucet for, as the decimal string its API expects. */
 const FAUCET_AMOUNT = '1000';
@@ -166,11 +143,8 @@ const requestDrip = async (faucetBase: string, address: string): Promise<boolean
 };
 
 const main = async (): Promise<void> => {
-  const network = (process.env.QB_NETWORK ?? 'preview') as NetworkName;
-  const env = NETWORKS[network];
-  if (env === undefined) {
-    throw new Error(`quietbooks: unknown network "${network}". Use preview or preprod.`);
-  }
+  const network = selectedNetwork();
+  const env = environmentFor(network);
 
   setNetworkId(network);
   configureNetwork(network);

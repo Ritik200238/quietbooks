@@ -33,7 +33,7 @@ import {
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 // Setting this module's own copy is not enough: @quietbooks/api resolves a
 // separate instance of the same package, and a circuit call reads that one.
-import { configureNetwork } from '@quietbooks/api';
+import { configureNetwork, publicEndpoints } from '@quietbooks/api';
 import type { Logger } from 'pino';
 
 import { storeNameFor } from './session.js';
@@ -141,22 +141,33 @@ const proofServerUrlOf = (environment: RemoteTestEnvironment): string => {
   return container.getUrl();
 };
 
+// One copy of the endpoint table lives in `@quietbooks/api`. Preprod is served by
+// Blockfrost and needs BLOCKFROST_PROJECT_ID; a missing one is reported there as
+// a sentence, before the wallet ever opens a socket.
+const remoteConfiguration = (
+  network: 'preview' | 'preprod',
+  proofServer: string,
+): EnvironmentConfiguration => {
+  const e = publicEndpoints(network, process.env.BLOCKFROST_PROJECT_ID);
+  return {
+    walletNetworkId: network,
+    networkId: network,
+    indexer: e.indexer,
+    indexerWS: e.indexerWS,
+    node: e.node,
+    nodeWS: e.nodeWS,
+    faucet: e.faucet,
+    proofServer,
+  };
+};
+
 export class PreviewTestEnvironment extends RemoteTestEnvironment {
   constructor(logger: Logger) {
     super(logger);
   }
 
   getEnvironmentConfiguration(): EnvironmentConfiguration {
-    return {
-      walletNetworkId: 'preview',
-      networkId: 'preview',
-      indexer: 'https://indexer.preview.midnight.network/api/v4/graphql',
-      indexerWS: 'wss://indexer.preview.midnight.network/api/v4/graphql/ws',
-      node: 'https://rpc.preview.midnight.network',
-      nodeWS: 'wss://rpc.preview.midnight.network',
-      faucet: 'https://midnight-tmnight-preview.nethermind.dev/',
-      proofServer: proofServerUrlOf(this),
-    };
+    return remoteConfiguration('preview', proofServerUrlOf(this));
   }
 }
 
@@ -166,15 +177,6 @@ export class PreprodTestEnvironment extends RemoteTestEnvironment {
   }
 
   getEnvironmentConfiguration(): EnvironmentConfiguration {
-    return {
-      walletNetworkId: 'preprod',
-      networkId: 'preprod',
-      indexer: 'https://indexer.preprod.midnight.network/api/v4/graphql',
-      indexerWS: 'wss://indexer.preprod.midnight.network/api/v4/graphql/ws',
-      node: 'https://rpc.preprod.midnight.network',
-      nodeWS: 'wss://rpc.preprod.midnight.network',
-      faucet: 'https://midnight-tmnight-preprod.nethermind.dev/',
-      proofServer: proofServerUrlOf(this),
-    };
+    return remoteConfiguration('preprod', proofServerUrlOf(this));
   }
 }

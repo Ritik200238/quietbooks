@@ -35,7 +35,6 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { nativeToken } from '@midnight-ntwrk/midnight-js-protocol/ledger';
-import type { EnvironmentConfiguration } from '@midnight-ntwrk/testkit-js';
 import type { FinalizedTxData } from '@midnight-ntwrk/midnight-js-types';
 import { UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
 
@@ -59,7 +58,9 @@ import {
   InvoiceStatus,
   type QuietBooksPrivateState,
 } from '@quietbooks/contract';
-import { configureNetwork } from '@quietbooks/api';
+import { configureNetwork, contractLinks, redactToken, transactionLinks } from '@quietbooks/api';
+
+import { environmentFor, selectedNetwork, type TestNetwork } from './public-network.js';
 
 import {
   E2EWalletProvider,
@@ -74,30 +75,6 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const ZK_CONFIG_PATH = path.resolve(REPO_ROOT, 'contract', 'build');
 
-type NetworkName = 'preview' | 'preprod';
-
-const NETWORKS: Record<NetworkName, EnvironmentConfiguration> = {
-  preview: {
-    walletNetworkId: 'preview',
-    networkId: 'preview',
-    indexer: 'https://indexer.preview.midnight.network/api/v4/graphql',
-    indexerWS: 'wss://indexer.preview.midnight.network/api/v4/graphql/ws',
-    node: 'https://rpc.preview.midnight.network',
-    nodeWS: 'wss://rpc.preview.midnight.network',
-    faucet: 'https://midnight-tmnight-preview.nethermind.dev/',
-    proofServer: process.env.QB_PROOF_SERVER ?? 'http://127.0.0.1:6300',
-  },
-  preprod: {
-    walletNetworkId: 'preprod',
-    networkId: 'preprod',
-    indexer: 'https://indexer.preprod.midnight.network/api/v4/graphql',
-    indexerWS: 'wss://indexer.preprod.midnight.network/api/v4/graphql/ws',
-    node: 'https://rpc.preprod.midnight.network',
-    nodeWS: 'wss://rpc.preprod.midnight.network',
-    faucet: 'https://midnight-tmnight-preprod.nethermind.dev/',
-    proofServer: process.env.QB_PROOF_SERVER ?? 'http://127.0.0.1:6300',
-  },
-};
 
 const logger = pino({
   level: process.env.QB_LOG_LEVEL ?? 'info',
@@ -114,6 +91,8 @@ type Receipt = {
   blockTimestamp: string;
   status: string;
   effect: string;
+  /** Pages where anyone can look this transaction up without trusting us. */
+  explorers: { explorer: string; url: string }[];
 };
 
 const receipts: Receipt[] = [];
@@ -125,7 +104,13 @@ const receipts: Receipt[] = [];
  * the indexer, so a line in the receipt file is a claim about the chain rather
  * than a claim about what this process believed it had done.
  */
-const record = (step: string, circuit: string, tx: FinalizedTxData, effect: string): void => {
+const record = (
+  network: TestNetwork,
+  step: string,
+  circuit: string,
+  tx: FinalizedTxData,
+  effect: string,
+): void => {
   const entry: Receipt = {
     step,
     circuit,
@@ -135,6 +120,7 @@ const record = (step: string, circuit: string, tx: FinalizedTxData, effect: stri
     blockTimestamp: new Date(tx.blockTimestamp).toISOString(),
     status: String(tx.status),
     effect,
+    explorers: transactionLinks(network, tx.txHash),
   };
   receipts.push(entry);
   logger.info(`${step}: ${entry.txHash} in block ${entry.blockHeight} -- ${effect}`);
@@ -159,9 +145,8 @@ const assertOk = (condition: boolean, message: string): void => {
 };
 
 const main = async (): Promise<void> => {
-  const network = (process.env.QB_NETWORK ?? 'preview') as NetworkName;
-  const env = NETWORKS[network];
-  if (env === undefined) throw new Error(`quietbooks: unknown network "${network}".`);
+  const network = selectedNetwork();
+  const env = environmentFor(network);
 
   setNetworkId(network);
   configureNetwork(network);
@@ -228,6 +213,7 @@ const main = async (): Promise<void> => {
     assertOk(toHex(l.instanceSalt) === toHex(instanceSalt), 'instance salt mismatch after deploy');
     assertOk(l.issuedCount === 0n, 'a fresh deployment should have issued nothing');
     record(
+      network,
       'deploy',
       'constructor',
       deployed.deployTxData.public,
@@ -313,6 +299,7 @@ const main = async (): Promise<void> => {
     assertOk(!serialised.includes(total.toString()), 'the invoice total appears in public state');
 
     record(
+      network,
       'issue',
       'issueInvoice',
       issue.public,
@@ -344,6 +331,7 @@ const main = async (): Promise<void> => {
       'the settled amount appears in public state',
     );
     record(
+      network,
       'settle',
       'settleWithNote',
       settle.public,
@@ -375,6 +363,7 @@ const main = async (): Promise<void> => {
     assertOk(g.revoked === false, 'a fresh grant should not be revoked');
     assertOk(g.expiresAt === expiresAt, 'expiry mismatch');
     record(
+      network,
       'audit',
       'grantAudit',
       grant.public,
@@ -390,8 +379,11 @@ const main = async (): Promise<void> => {
     startedAt,
     completedAt: new Date().toISOString(),
     contractAddress: address,
+    contractExplorers: contractLinks(network, address),
     payer,
-    indexer: env.indexer,
+    // Redacted: on preprod this URL carries a Blockfrost token, and this file
+    // is committed.
+    indexer: redactToken(env.indexer),
     contract: {
       source: 'contract/src/quietbooks.compact',
       language: 'Compact 0.23',
