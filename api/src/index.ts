@@ -754,6 +754,8 @@ export class QuietBooksAPI {
 const NO_RELIABILITY: Reliability = {
   settled: 0n,
   settledOnTime: 0n,
+  settledAttested: 0n,
+  settledAttestedOnTime: 0n,
   cancelled: 0n,
   disputesOpened: 0n,
   disputesLost: 0n,

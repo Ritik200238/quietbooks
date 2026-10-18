@@ -19,6 +19,9 @@ export const reliability = async (context: AppContext): Promise<void> => {
     renderFields([
       ['Settled', counters.settled.toString()],
       ['Settled on time', counters.settledOnTime.toString()],
+      ['Attested only', counters.settledAttested.toString()],
+      ['Attested only, on time', counters.settledAttestedOnTime.toString()],
+      ['Watched by the chain', (counters.settled - counters.settledAttested).toString()],
       ['Cancelled', counters.cancelled.toString()],
       ['Disputes opened', counters.disputesOpened.toString()],
       ['Disputes lost', counters.disputesLost.toString()],
@@ -28,9 +31,15 @@ export const reliability = async (context: AppContext): Promise<void> => {
   out('  They are counts, never amounts, and they carry no link back to any');
   out('  individual invoice. Anyone can read them for any party key.');
   out('');
-  out('  A circuit that proves a threshold over these -- "at least N settled, at');
-  out('  least M on time" -- without disclosing the counts is Wave 2 work. Every');
-  out('  entry point costs a verifier key in the deploy transaction, and a deploy');
-  out('  has to fit inside one block. The record is being kept now so that proof');
-  out('  has something to run against.');
+  out('  Read the last three lines before the first two. An attested settlement is');
+  out('  one the seller recorded for a payment the contract could not see -- a bank');
+  out('  transfer, an older block -- and no value moves in that transaction. A');
+  out('  seller can therefore issue an invoice to a key nobody holds, attest it');
+  out('  paid, and raise their own total for the price of the fees.');
+  out('');
+  out('  The contract cannot stop that without destroying the case the attested');
+  out('  path exists for, so it publishes the split instead: subtract the attested');
+  out('  count from the total and what is left is the settlements where the chain');
+  out('  itself saw a coin move. Which of the two numbers to trust is the reader\'s');
+  out('  judgement, and it was never ours to make for them.');
 };

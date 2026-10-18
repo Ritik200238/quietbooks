@@ -71,7 +71,8 @@ export const Header = (): JSX.Element => {
     if (state === undefined) {
       return undefined;
     }
-    const { settled, settledOnTime, cancelled, disputesOpened, disputesLost } = state.reliability;
+    const { settled, settledOnTime, settledAttested, cancelled, disputesOpened, disputesLost } =
+      state.reliability;
     if (
       settled === 0n &&
       cancelled === 0n &&
@@ -81,6 +82,13 @@ export const Header = (): JSX.Element => {
       return 'No settlement history yet';
     }
     const parts = [`${settled} settled`, `${settledOnTime} on time`];
+    if (settledAttested > 0n) {
+      // Shown in the summary and not only on a detail page. An attested
+      // settlement moved no value the chain could check, so a reader being
+      // handed a total is owed the part of it that rests on the seller's own
+      // word -- which is the whole of what QB-M-2 is about.
+      parts.push(`${settledAttested} attested only`);
+    }
     if (cancelled > 0n) {
       parts.push(`${cancelled} cancelled`);
     }
