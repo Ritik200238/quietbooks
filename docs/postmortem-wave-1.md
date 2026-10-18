@@ -12,6 +12,43 @@ disagree with the evidence rather than the conclusion.
 
 ---
 
+## Correction, 2026-10-19: Wave 1 was never judged
+
+Everything below was written before anyone read the judging record, and its central premise is
+wrong. QuietBooks did not lose a comparison with PollPower. It was not in the comparison.
+
+AKINDO publishes every submission and every judge's vote through its public API
+(`https://api.akindo.io/public/wave-hacks/jaMZjqPOBsLXvjdG/waves/93kamlaZdFzG7oaA/submissions`).
+For our Wave 1 entry it records:
+
+| Field | Value |
+|---|---|
+| `product.name` | `Quietbook` |
+| `product.isPublic` | `false` |
+| `product.githubRepositoryName` | `null` |
+| `product.deliverableUrl` | `null` |
+| `votes` | `[]` |
+
+Of 159 Wave 1 submissions, 7 received a vote, and all 7 were public with a repository entered in
+the repository field. Ours was private, and its links existed only as text inside the description.
+Being public with a linked repository is not sufficient — 105 entries were public and 99 had one
+— so what else the judges filtered on is unknown. It is plainly necessary.
+
+The votes themselves are worth reading, because they are the rubric as it is actually applied.
+Each Engineering note opens with whether the contract "compiled cleanly" and how many circuits it
+"defines", then whether there is "genuine private state with a `witnesses.ts` and a
+commitment/hash". QA asks whether tests "exercise the contract through a simulator and assert
+real state". UX asks whether "a react frontend is present", whether it "sets up the full wallet
+provider stack", and whether it "calls the contract and reads on-chain state back". PollPower
+placed first with the note "No runnable frontend was detected" and "Test files exist but don't
+drive the contract through a simulator". QuietBooks has both, and no judge saw either.
+
+The diagnosis below — that a judge could check nothing — still holds for the day the entry is
+read, so it stays as written. But the first fix is not engineering and not evidence. It is
+filling in the submission form.
+
+---
+
 ## 1. What a judge can actually check
 
 A judge does not clone the repository, install WSL2, start Docker, bring up a four-container local
@@ -203,11 +240,16 @@ The engineering is not the problem. The evidence is.
 
 ---
 
-## 7. Wave 2 closed on 2026-10-17. Here is the honest score.
+## 7. Wave 2 progress, scored on 2026-10-18
 
-Four of the six items above landed. The first one did not, and it was the one that mattered: the
-section above calls it "the single highest-value item in the project", and Wave 2 was submitted
-without it. There are still no public transaction hashes.
+This section first said Wave 2 had closed on 2026-10-17. It had not: the wave record says
+submissions close at **2026-10-19 15:00:34 UTC** (`activeWave.submissionDeadline` from
+`https://api.akindo.io/public/wave-hacks/jaMZjqPOBsLXvjdG`), and as of 2026-10-18 QuietBooks had
+not been submitted to it at all.
+
+Four of the six items above landed. The first one did not, and it is the one that matters: the
+section above calls it "the single highest-value item in the project". There are still no public
+transaction hashes.
 
 | # | Item | Wave 2 outcome |
 |---|---|---|
