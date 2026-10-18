@@ -1,0 +1,74 @@
+# Install the pinned Compact toolchain, from cache where possible.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Both CI jobs need the compiler, and both used to install it from scratch. That
+# made every run depend on two network calls, and the second of them -- `compact
+# update` -- queries the GitHub API without credentials. GitHub rate-limits
+# unauthenticated calls per source address, hosted runners share addresses, and
+# so CI failed on 2026-10-18 with "API rate limit exceeded for 40.76.239.35" on
+# a commit that touched three TypeScript files. The build was not broken; the
+# toolchain simply could not be fetched.
+#
+# Caching is the fix rather than a workaround: the pinned versions never change
+# within a wave, so after the first run there is no API call left to be limited.
+# The retry below covers the cold path and transient failures only. It cannot
+# talk its way past a rate limit that lasts an hour, and it is not pretending to.
+
+name: Set up the Compact toolchain
+description: Install the pinned Compact developer tools and compiler, using the runner cache.
+
+inputs:
+  devtools-version:
+    description: The compact devtools release to install.
+    required: true
+  toolchain-version:
+    description: The compiler toolchain to select.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Restore the toolchain from cache
+      id: cache
+      uses: actions/cache@v4
+      with:
+        # `compact` keeps its own binary in ~/.local/bin and the compilers it
+        # manages under ~/.compact. Restoring one without the other leaves a
+        # launcher with nothing to launch, so they are one cache entry.
+        path: |
+          ~/.compact
+          ~/.local/bin/compact
+        key: compact-${{ runner.os }}-${{ inputs.devtools-version }}-${{ inputs.toolchain-version }}
+
+    - name: Install the Compact developer tools
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        curl --proto '=https' --tlsv1.2 -LsSf --retry 3 --retry-delay 5 \
+          "https://github.com/midnightntwrk/compact/releases/download/compact-v${{ inputs.devtools-version }}/compact-installer.sh" | sh
+
+    - name: Put the toolchain on PATH
+      shell: bash
+      run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Install the pinned Compact compiler
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        for attempt in 1 2 3 4; do
+          if compact update "${{ inputs.toolchain-version }}"; then
+            exit 0
+          fi
+          delay=$(( attempt * 30 ))
+          echo "attempt ${attempt} failed; retrying in ${delay}s"
+          sleep "${delay}"
+        done
+        echo "::error::could not install Compact toolchain ${{ inputs.toolchain-version }}"
+        exit 1
+
+    - name: Report the toolchain in use
+      shell: bash
+      run: |
+        compact --version
+        compact compile --version

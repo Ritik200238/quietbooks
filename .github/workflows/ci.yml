@@ -28,19 +28,11 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install the Compact developer tools
-        run: |
-          curl --proto '=https' --tlsv1.2 -LsSf \
-            "https://github.com/midnightntwrk/compact/releases/download/compact-v${COMPACT_DEVTOOLS_VERSION}/compact-installer.sh" | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Install the pinned Compact compiler
-        run: compact update "$COMPACT_TOOLCHAIN_VERSION"
-
-      - name: Report the toolchain in use
-        run: |
-          compact --version
-          compact compile --version
+      - name: Set up the Compact toolchain
+        uses: ./.github/actions/setup-compact
+        with:
+          devtools-version: ${{ env.COMPACT_DEVTOOLS_VERSION }}
+          toolchain-version: ${{ env.COMPACT_TOOLCHAIN_VERSION }}
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
@@ -92,14 +84,11 @@ jobs:
 
       # The interface imports generated contract bindings, so the Compact
       # compiler is required even for a frontend-only build.
-      - name: Install the Compact developer tools
-        run: |
-          curl --proto '=https' --tlsv1.2 -LsSf \
-            "https://github.com/midnightntwrk/compact/releases/download/compact-v${COMPACT_DEVTOOLS_VERSION}/compact-installer.sh" | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Install the pinned Compact compiler
-        run: compact update "$COMPACT_TOOLCHAIN_VERSION"
+      - name: Set up the Compact toolchain
+        uses: ./.github/actions/setup-compact
+        with:
+          devtools-version: ${{ env.COMPACT_DEVTOOLS_VERSION }}
+          toolchain-version: ${{ env.COMPACT_TOOLCHAIN_VERSION }}
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
