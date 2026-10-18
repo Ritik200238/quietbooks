@@ -208,6 +208,13 @@ const waitForSpendableDust = (ctx: WalletContext, logger: Logger, timeoutMs = 30
  * is accepted immediately but the first DUST coin takes a few blocks, and a
  * transaction submitted in between fails for lack of fees.
  */
+// Generation runs at 8,267 Specks per Star per second
+// (`concepts/dust-architecture.mdx:181`-`:185`), so 1,000 tNIGHT accrues about
+// 0.008 DUST a second. The registration fee itself is not published, so the
+// wait is bounded generously rather than computed: thirty minutes in all.
+const REGISTRATION_ATTEMPTS = 30;
+const REGISTRATION_RETRY_MS = 60_000;
+
 export const registerForDust = async (ctx: WalletContext, logger: Logger): Promise<void> => {
   const state = await Rx.firstValueFrom(
     ctx.wallet.state().pipe(Rx.filter((s) => isComplete(s.unshielded.progress))),
@@ -228,13 +235,34 @@ export const registerForDust = async (ctx: WalletContext, logger: Logger): Promi
   }
 
   logger.info(`registering ${unregistered.length} NIGHT UTXO(s) for DUST generation`);
-  const recipe = await ctx.wallet.registerNightUtxosForDustGeneration(
-    unregistered,
-    ctx.unshieldedKeystore.getPublicKey(),
-    (payload) => ctx.unshieldedKeystore.signData(payload),
-  );
-  const finalized = await ctx.wallet.finalizeRecipe(recipe);
-  const txId = await ctx.wallet.submitTransaction(finalized);
+
+  // A first registration pays its own fee out of DUST the NIGHT has accrued
+  // retroactively since that UTXO was created. Straight off the faucet it has
+  // accrued almost nothing, and the ledger refuses with
+  // `InsufficientDustForRegistrationFee`; the documented answer is to wait
+  // (`concepts/dust-architecture.mdx:191`-`:197`). On the standalone node this
+  // never happens because the genesis coins are old, which is how it went
+  // unnoticed until the public-network path was read against the docs.
+  let txId: string | undefined;
+  for (let attempt = 1; txId === undefined; attempt++) {
+    try {
+      const recipe = await ctx.wallet.registerNightUtxosForDustGeneration(
+        unregistered,
+        ctx.unshieldedKeystore.getPublicKey(),
+        (payload) => ctx.unshieldedKeystore.signData(payload),
+      );
+      const finalized = await ctx.wallet.finalizeRecipe(recipe);
+      txId = await ctx.wallet.submitTransaction(finalized);
+    } catch (error) {
+      const text = error instanceof Error ? `${error.message} ${String(error.cause ?? '')}` : String(error);
+      if (!/InsufficientDust/i.test(text) || attempt >= REGISTRATION_ATTEMPTS) throw error;
+      logger.info(
+        `registration fee not yet accrued (attempt ${attempt}/${REGISTRATION_ATTEMPTS}); ` +
+          `waiting ${REGISTRATION_RETRY_MS / 1000}s for the NIGHT to age`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, REGISTRATION_RETRY_MS));
+    }
+  }
   logger.info(`DUST registration submitted: ${txId}`);
 
   await waitForSpendableDust(ctx, logger);
