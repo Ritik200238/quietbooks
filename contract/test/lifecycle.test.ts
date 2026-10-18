@@ -370,6 +370,15 @@ describe('settling with a bound shielded transfer', () => {
     expect(led(d).settlements.lookup(invoiceId).settledAt).toBe(at - window);
   });
 
+  it('allows exactly one hour of slack, pinned here on purpose', async () => {
+    // The two tests above take their input from `TIMESTAMP_WINDOW`, so widening
+    // the window would leave both of them green while the guarantee quietly got
+    // weaker -- which is what the mutation sweep found when a mutant pushed it
+    // out to a year and nothing went red. Changing the bound now means changing
+    // this line too, in a commit somebody has to justify.
+    expect(pureCircuits.TIMESTAMP_WINDOW()).toBe(3600n);
+  });
+
   it('refuses a second settlement of the same invoice', async () => {
     const { d, invoiceId, buyer, prepared, stored } = await settle();
     const buyerState = stageFor(share(buyer.state, stored), prepared);

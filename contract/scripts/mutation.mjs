@@ -127,8 +127,33 @@ const MUTANTS = [
   {
     name: 'dispute: take the reliability counter from the arbiter again',
     files: ['test/hostile-witness.test.ts'],
-    find: '    bumpSettled(anchor.sellerKey, onTime);',
-    replace: '    bumpSettled(anchor.sellerKey, at <= anchor.dueDate);',
+    find: '    bumpSettled(anchor.sellerKey, onTime, false);',
+    replace: '    bumpSettled(anchor.sellerKey, at <= anchor.dueDate, false);',
+  },
+  {
+    name: 'timestamp: let a caller date a record in the future',
+    files: ['test/lifecycle.test.ts'],
+    find: `  assert(blockTimeGte(t), "quietbooks: timestamp is in the future");\n`,
+    replace: '',
+  },
+  {
+    name: 'timestamp: drop the bound on how stale a date may be',
+    files: ['test/lifecycle.test.ts'],
+    find: `  assert(!blockTimeGt((t + TIMESTAMP_WINDOW()) as Uint<64>),
+         "quietbooks: timestamp is too far in the past");`,
+    replace: '',
+  },
+  {
+    name: 'timestamp: widen the window to a year',
+    files: ['test/lifecycle.test.ts'],
+    find: 'export circuit TIMESTAMP_WINDOW(): Uint<64> { return 3600; }',
+    replace: 'export circuit TIMESTAMP_WINDOW(): Uint<64> { return 31536000; }',
+  },
+  {
+    name: 'reliability: stop recording which settlements were only attested',
+    files: ['test/lifecycle.test.ts'],
+    find: '    settledAttested: attested ? ((r.settledAttested + 1) as Uint<64>) : r.settledAttested,',
+    replace: '    settledAttested: r.settledAttested,',
   },
   {
     name: 'refund: block it while the contract is paused',
