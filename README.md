@@ -451,13 +451,20 @@ Stated plainly, because a reader can check.
   that was not disclosed. We had this wrong for three waves and found it only when the circuit
   was designed rather than described.
 
-  Making the proof worth having means the counters cannot stay public. The design that works
-  is a commitment: the ledger holds `persistentHash` of the counters, each settlement presents
-  the previous counters as witness data, the circuit checks them against the stored digest,
-  increments, and writes the new digest. The counts then exist only in the parties' own state,
-  and a threshold proof over them means something. That is a change to every settlement path
-  plus one new entry point — thirteen, against the twelve that measured at 61.6% of the write
-  budget — and it is the next circuit.
+  The fix this README proposed on 2026-10-18 does not work either. It was to store a hash of
+  each party's counters and have every settlement present the previous counters as a witness,
+  check them against the hash and write the next one. But the buyer runs the settlement, and the
+  buyer does not hold the seller's counters. It was described, again, before it was designed.
+
+  What the docs do support is the commitment-and-Merkle-tree pattern
+  (`concepts/how-midnight-works/keeping-data-private.mdx:173`-`:224`): every settlement appends a
+  receipt to a `HistoricMerkleTree`, and a party later proves it holds at least N on-time
+  receipts across every key it has used, without saying which receipts or which keys. That is
+  worth proving for a reason the public counters cannot reach. Today, rotating a key for
+  unlinkability resets the visible history, so a supplier has to choose between privacy from its
+  customers and a track record. An aggregate proof removes the choice: one key per customer, one
+  record. It costs one entry point and a Merkle insert on every settlement path, and its proving
+  cost is unmeasured. Not built.
 - **Multi-token issuance in the interface.** The contract binds every invoice to its
   token; the interface issues in the native one.
 - **Partial payments, administrator rotation, vesting and payroll schedules.**

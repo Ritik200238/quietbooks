@@ -844,11 +844,13 @@ instance of the same contract in the same segment.</pre>
     <ul class="plain">
       <li><b>Written by the contract, not by the party it describes.</b> That is the whole difference between this and a claim on a website.</li>
       <li><b>Public by construction.</b> They are counts in public ledger state, so a prospective customer can read them for any party key without asking permission.</li>
-      <li><b>The threshold proof over them is Wave 2.</b> &ldquo;At least twenty settled, at least eighteen on time&rdquo; as one boolean, disclosing none of the counts, is written and tested but not in this deploy. The next slide says why.</li>
+      <li><b>A proof over them is not built, and the first one was not worth building.</b> The Wave 1 contract had a circuit that checked a threshold against these counts. The counts are public, so it disclosed nothing a reader could not already see, and it was cut. What is worth proving is an aggregate across keys, which counters cannot give: see the last line on this slide.</li>
     </ul>
     <p class="note">The honest cost, stated in the contract header and asserted in a test:
       counters are keyed by party key, so rotating a PIN for unlinkability also resets the
-      visible history.</p>
+      visible history. The next circuit removes that trade: settlement receipts in a Merkle
+      tree, and a proof of at least N on-time receipts across every key a party holds, without
+      naming one.</p>
   </section>
 
   <!-- 12 -->
@@ -884,8 +886,9 @@ instance of the same contract in the same segment.</pre>
       </table>
     </div>
     <p>Four of the six circuits removed were entry points nothing called, including a
-      duplicate of a rule the off-chain validator already enforced. Two were real features
-      deferred to Wave 2. Splitting escrow into a second contract would have kept
+      duplicate of a rule the off-chain validator already enforced. Two were real features,
+      deferred: administrator rotation, and the reliability check, which turned out to prove
+      nothing (slide 10). Splitting escrow into a second contract would have kept
       everything and was rejected: Midnight has no cross-contract calls, so releasing an
       escrow and marking its invoice settled would stop being atomic.</p>
     <div class="callout">
@@ -979,8 +982,8 @@ instance of the same contract in the same segment.</pre>
     <p class="lead">A roadmap that lists only wins is not a roadmap.</p>
     <ul class="plain">
       <li><b>Nothing issues in a token other than the native shielded one.</b> The contract binds each invoice to the token it is payable in and refuses any other, but neither interface offers a way to pick that token at issue time. The enforcement is real and tested; the choice is not yet offered.</li>
-      <li><b>A wallet-connected run of the web interface.</b> Everything that does not need a browser wallet has been driven in a real browser, and the contract is covered end to end through a headless one. What is untested is Lace itself on TestNet, which no harness here can stand in for.</li>
-      <li><b>The reliability threshold proof.</b> Written and tested, deferred to Wave 2 for the block-budget reason above. The counters it proves over are already being kept.</li>
+      <li><b>A wallet-connected run of the web interface.</b> Everything that does not need a browser wallet has been driven in a real browser, and the contract is covered end to end through a headless one. What is untested is Lace itself on Preview, which no harness here can stand in for.</li>
+      <li><b>The reliability proof.</b> Not built. The Wave 1 version checked a threshold against public counts and so proved nothing. Its replacement aggregates settlement receipts across all of a party's keys without naming them, and is the next circuit.</li>
       <li><b>Administrator rotation.</b> Removed for the same reason. The administrator is fixed at deploy; the emergency stop still works.</li>
       <li><b>Local proof server.</b> Every user needs one running. True of every Midnight DApp today; in-browser proving is the fix when it reaches the wallet.</li>
       <li><b>Partial payments.</b> Every invoice settles once, in full. No recurring schedules, no multi-currency netting.</li>
