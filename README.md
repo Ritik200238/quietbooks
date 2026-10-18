@@ -14,6 +14,7 @@ Private B2B invoicing, shielded settlement and selective audit on
 [![Compact](https://img.shields.io/badge/Compact-0.23-5b83d6)](https://docs.midnight.network)
 [![live app](https://img.shields.io/badge/live-quietbooks.vercel.app-58a67c)](https://quietbooks.vercel.app)
 
+[For reviewers](#for-reviewers) ·
 [What the chain sees](#what-the-chain-can-and-cannot-see) ·
 [See it running](#see-it-running) ·
 [How it works](#how-it-works) ·
@@ -35,6 +36,22 @@ the chain has held a commitment to since the day it was issued.
 That last part is the point. Hiding data is easy: keep it off the chain. The hard part
 is proving later that what you are showing someone is what you committed to at the
 time, without having published it in the meantime.
+
+---
+
+## For reviewers
+
+Where each thing you are likely to check lives, so none of it has to be found.
+
+| Check | Where | Result |
+|---|---|---|
+| The Compact contract compiles | [`contract/src/quietbooks.compact`](contract/src/quietbooks.compact), compiled by CI on every push with the pinned toolchain 0.31.1 | **40 exported circuits**: 12 entry points with proving and verifier keys (24 key files), 28 pure helpers |
+| Private state | [`contract/src/witnesses.ts`](contract/src/witnesses.ts) implements all **6 witnesses** the contract declares; the chain holds `persistentCommit` digests of the terms and of each field | No circuit writes an amount to public state |
+| Dual ledger | [What the chain can and cannot see](#what-the-chain-can-and-cannot-see) | Settlement moves a shielded coin and updates public state in one transaction |
+| Tests drive the contract through a simulator | [`contract/test/harness.ts`](contract/test/harness.ts) runs the **compiled** contract in process with `createCircuitContext` from `@midnight-ntwrk/compact-runtime`, and the tests assert on the ledger it returns | **262 passing**, plus 22 of 22 reverted security fixes caught |
+| Frontend connected to the contract | [`ui/`](ui/) — React and Vite. [`ui/src/lib/providers.ts`](ui/src/lib/providers.ts) builds the full provider stack from the wallet's DApp connector: proof server, indexer, private state, ZK config | Deploys, joins, issues, settles and audits; it renders from a subscription to the contract's state through the indexer ([`api/src/index.ts`](api/src/index.ts)), not from the local result of a call |
+| End to end on a real node | [`e2e/src/run.ts`](e2e/src/run.ts), real proofs, state asserted through the indexer | 27 of 27 steps, and 15 of 15 between two wallets that share no keys |
+| Deployed on a public network | Not yet. See [what is not built yet](#what-is-not-built-yet) | — |
 
 ---
 
@@ -186,9 +203,9 @@ Every number here comes from a command in this repository that you can run.
 
 | Evidence | Result | Command |
 |---|---|---|
-| Contract test suite | **257 passing** | `npm test --workspace @quietbooks/contract` |
-| API test suite | **28 passing** | `npm test --workspace @quietbooks/api` |
-| Mutation testing: each security fix reverted, recompiled, tests required to fail | **18 of 18 killed** | `npm run test:mutation --workspace @quietbooks/contract` |
+| Contract test suite | **262 passing** | `npm test --workspace @quietbooks/contract` |
+| API test suite | **39 passing** | `npm test --workspace @quietbooks/api` |
+| Mutation testing: each security fix reverted, recompiled, tests required to fail | **22 of 22 killed** | `npm run test:mutation --workspace @quietbooks/contract` |
 | Static check: no circuit reads a witness twice | **clean** | `npm run check:witness-reads --workspace @quietbooks/contract` |
 | End to end on a real node, real proofs | **27 of 27 steps** | `npm run e2e --workspace @quietbooks/e2e` |
 | Two wallets that share no keys | **15 of 15 steps** | `npm run e2e:two-party --workspace @quietbooks/e2e` |
