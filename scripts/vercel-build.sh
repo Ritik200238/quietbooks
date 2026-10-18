@@ -49,3 +49,12 @@ npm run build --workspace @quietbooks/api
 export VITE_NETWORK_ID="${VITE_NETWORK_ID:-preview}"
 echo "Building the interface for network ${VITE_NETWORK_ID}"
 npm run build --workspace @quietbooks/ui
+
+# The deck is a submission requirement and a judge opens it from a link, so it
+# ships beside the interface rather than living only as source in the repo.
+# `docs/pitch.html` references its captures as `screens/…`, so both travel
+# together and the page needs no rewriting.
+echo "Publishing the deck at /deck/"
+mkdir -p ui/dist/deck
+cp docs/pitch.html ui/dist/deck/index.html
+cp -r docs/screens ui/dist/deck/screens
