@@ -8,7 +8,11 @@
 // whole business flow against a live node, indexer and proof server:
 //
 //   deploy -> issue -> settle -> grant an audit -> validate an envelope
-//          -> prove reliability -> cancel a second invoice
+//          -> read the reliability counters back -> cancel a second invoice
+//
+// That seventh step used to be described here as "prove reliability". It reads
+// the counters through the indexer and checks them; it proves nothing, and there
+// is no circuit that does.
 //
 // Every step asserts against state read back from the chain through the
 // indexer, not against the local result of the call. A step that cannot be

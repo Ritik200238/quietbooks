@@ -269,6 +269,36 @@ that worked.
 
 ---
 
+## What our own audit found
+
+[docs/audit-2026-10-16.md](docs/audit-2026-10-16.md) is a review of this contract written by the
+people who wrote the contract. It carries the weakness that implies and says so on its first page.
+It found three problems. All three are fixed, and each fix has a test that goes red if it is
+reverted.
+
+**QB-M-1, medium — every public date was the caller's to invent.** Six timestamps reached the
+ledger straight from a caller argument with nothing compared against the chain's clock. The only
+constraint was that an invoice's due date fell after its issue date, and the same caller supplied
+both figures. A seller could stamp an invoice with any year; a buyer could date a settlement
+before the invoice existed. Compact cannot fix that outright — the standard library offers four
+comparisons against block time and no circuit that returns it, so a contract can test a date but
+never record one. The claim is bounded instead: a date the chain has not reached is refused, and
+so is one more than an hour behind the block that carries it.
+
+**QB-M-2, medium — a seller could manufacture their own reliability record.** `settleAttested`
+moves no value, and `issueInvoice` cannot tell whether the buyer key belongs to anybody. So a
+seller could issue an invoice to a key nobody holds, attest it paid, and raise their own settled
+count for the price of the fees. No patch keeps the feature: requiring the buyer to co-sign
+destroys the case the attested path exists for, and requiring a buyer key with history only moves
+the problem, because one secret derives unlimited keys. So the contract publishes the split
+instead of hiding the weakness. `settledAttested` and `settledAttestedOnTime` sit beside the
+totals; subtract them and what remains are the settlements where the chain itself watched a coin
+move. The interface, the CLI and the API all show it.
+
+**QB-L-1, low — a section header for a circuit that was never written.** Deleted.
+
+---
+
 ## Why twelve entry points
 
 A Midnight deploy carries one verifier key per entry point, and the whole transaction has
@@ -388,10 +418,29 @@ the deployment build for the reason above.
 Stated plainly, because a reader can check.
 
 - **No mainnet, no external audit.** The end-to-end runs are on a local Midnight network.
-- **No public Preview deployment yet.** The interface is built for Preview; the contract
-  is not deployed there, so there are no public explorer links in this wave.
-- **The reliability proof circuit.** The contract keeps the counters; proving "at least 20
-  settled, 18 on time, none lost" without revealing the counts is the next circuit.
+- **No public Preview deployment yet.** The interface is built for Preview and the deploy
+  script is written and reviewed, but the contract is not deployed there, so there are no
+  public explorer links. This is the single biggest gap in the project and the reason given
+  in [docs/postmortem-wave-1.md](docs/postmortem-wave-1.md) for losing Wave 1. It is not an
+  engineering problem: the faucet is gated on a captcha a human has to clear, and we will not
+  route around that.
+- **The reliability proof circuit — and not in the shape this README used to promise.** What
+  it said was that the contract keeps the counters and that proving "at least 20 settled, 18
+  on time, none lost" *without revealing the counts* was the next circuit. That cannot be
+  built. The counters live in `ledger reliability`, and a ledger records public state
+  (`concepts/how-midnight-works/compact-privacy-first-language.mdx:31`, and
+  `compact/smart-contract-security.mdx:110`). The counts are already readable by anyone, for
+  any party key — our own CLI says so — and a proof about a public number discloses nothing
+  that was not disclosed. We had this wrong for three waves and found it only when the circuit
+  was designed rather than described.
+
+  Making the proof worth having means the counters cannot stay public. The design that works
+  is a commitment: the ledger holds `persistentHash` of the counters, each settlement presents
+  the previous counters as witness data, the circuit checks them against the stored digest,
+  increments, and writes the new digest. The counts then exist only in the parties' own state,
+  and a threshold proof over them means something. That is a change to every settlement path
+  plus one new entry point — thirteen, against the twelve that measured at 61.6% of the write
+  budget — and it is the next circuit.
 - **Multi-token issuance in the interface.** The contract binds every invoice to its
   token; the interface issues in the native one.
 - **Partial payments, administrator rotation, vesting and payroll schedules.**

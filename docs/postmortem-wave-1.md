@@ -186,9 +186,10 @@ Priority order, highest first. Nothing below the line starts before the thing ab
 1. **Deploy to Midnight Preview and publish the transaction hashes.** One artifact,
    `docs/receipts/preview.json`, with the same shape as PollPower's: deploy, issue, settle and audit,
    each with its circuit, transaction hash, date and state effect. This is the single highest-value
-   item in the project and it is blocked on faucet tokens for
-   `mn_addr_preview1l50aj2tk3cspngv8jsvm4rs20t799fw5mmv93fs2hs0ulpz4a7zqy80n6v`, which needs a human
-   to request them.
+   item in the project and it is blocked on faucet tokens, which need a human to request them.
+   `npm run preview:fund --workspace @quietbooks/e2e` prints the address to fund. (This first named
+   a specific address; the wallet behind it has been regenerated since, and the seed never belongs
+   in the repository, so the command is the durable reference.)
 2. **Point the live site at that deployment.** A visitor with Lace on Preview must be able to open
    `quietbooks.vercel.app`, connect, and read a real invoice without installing anything.
 3. **Delete the three broken videos and record a real one** against the deployed contract, narrated
@@ -199,3 +200,49 @@ Priority order, highest first. Nothing below the line starts before the thing ab
 6. **Put real screenshots in the deck.**
 
 The engineering is not the problem. The evidence is.
+
+---
+
+## 7. Wave 2 closed on 2026-10-17. Here is the honest score.
+
+Four of the six items above landed. The first one did not, and it was the one that mattered: the
+section above calls it "the single highest-value item in the project", and Wave 2 was submitted
+without it. There are still no public transaction hashes.
+
+| # | Item | Wave 2 outcome |
+|---|---|---|
+| 1 | Deploy to Preview, publish receipts | **Not done.** Script written and reviewed (`e2e/src/preview-deploy.ts`), never run against the network. |
+| 2 | Point the live site at the deployment | **Not done**, and cannot be until 1 is. |
+| 3 | Delete the broken videos; record a real one | **Half.** The three broken videos are gone. No replacement was recorded, so the entry now has no demo video at all. |
+| 4 | Publish a self-audit | **Done**, `docs/audit-2026-10-16.md`, three findings, severity-rated. All three fixed on 2026-10-18. |
+| 5 | Rewrite the README around the receipts | **Not done**, because there are no receipts to rewrite it around. |
+| 6 | Real screenshots in the deck | **Done.** Captures of the running product replaced the drawings. |
+
+### Why item 1 did not happen
+
+Two reasons, and only one of them is a real constraint.
+
+**The faucet is gated on a Cloudflare Turnstile captcha.** A request carrying the placeholder token
+that `testkit-js` sends is answered `403 {"error":"Captcha verification failed"}`. Worse, testkit's
+`FaucetClient` posts to the faucet's base URL, which serves the single-page app: the response is
+`200 OK` with an HTML body and the client reports success, so the original run waited indefinitely
+for money nobody had sent. That is fixed — `preview-fund.ts` calls the real endpoint and says
+plainly when it cannot ask — but the gate itself is deliberate and is not ours to route around. It
+needs a person at a browser for about thirty seconds.
+
+**The machine ran out of memory.** Proving needs the proof server, and the host has 8 GB with a
+browser on it. Two runs were killed by the operating system at roughly 1.2 GB free. A
+proof-server-only compose file now exists so the node and indexer are not also resident, but this
+is an ordinary resource problem, not a technical obstacle, and it should not be described as one.
+
+### What this means for Wave 3, closing 2026-11-16
+
+The ranking of work does not change, because the diagnosis in §5 has not changed and is now
+supported by a second data point: a wave spent improving the contract, the audit and the deck moved
+nothing, because none of it is checkable by someone who will not clone the repository.
+
+1. Fund the wallet and deploy. Thirty seconds of human attention stands between this project and
+   the thing it has twice been beaten on.
+2. Record the demo video against that deployment. The entry currently has none, and the buildathon
+   asks for one, so this is an eligibility question and not a presentation one.
+3. Then the engineering, which is in good shape and getting better.
