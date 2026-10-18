@@ -71,6 +71,7 @@ import {
 export * from './common-types.js';
 export * from './store-password.js';
 export * from './network.js';
+export * from './endpoints.js';
 export * from './coin-key.js';
 export * from './errors.js';
 export * from './record.js';
